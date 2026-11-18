@@ -31,7 +31,7 @@ impl Default for SimulatedSetup {
     fn default() -> Self {
         Self::with_devices(vec![DiscoveredDevice {
             handle: "simulation:device-1".into(),
-            display_name: "Fotobox · Demo".into(),
+            display_name: "Photo booth · Demo".into(),
         }])
     }
 }
@@ -42,7 +42,7 @@ impl SimulatedSetup {
             (1..=count)
                 .map(|number| DiscoveredDevice {
                     handle: format!("simulation:device-{number}"),
-                    display_name: format!("Fotobox {number:02}"),
+                    display_name: format!("Photo booth {number:02}"),
                 })
                 .collect(),
         )
@@ -244,7 +244,7 @@ impl SimulatedSetup {
                 ip_reachability: IpReachability::Unverified,
             }),
             networks: if self.scanned {
-                vec!["Event-WLAN".into(), "Studio".into(), "Gastnetz".into()]
+                vec!["Event-WiFi".into(), "Studio".into(), "Guest network".into()]
             } else {
                 Vec::new()
             },
@@ -266,7 +266,7 @@ impl SimulatedSetup {
                 os_name: Some("Raspbian GNU/Linux 10 (buster)".into()),
                 kernel: Some("5.10.103+".into()),
                 model: Some("Raspberry Pi Zero W Rev 1.1".into()),
-                hostname: Some("Fotobox".into()),
+                hostname: Some("photobooth".into()),
                 addresses: vec![zorvinkel_application::system::NetworkAddress {
                     interface: "wlan0".into(),
                     address: std::net::Ipv4Addr::new(192, 168, 1, 42).into(),
@@ -303,7 +303,7 @@ fn simulated_services() -> Vec<zorvinkel_application::services::ServiceEntry> {
     ];
     vec![
         ServiceEntry {
-            group: "Musik".into(),
+            group: "Music".into(),
             name: "Raspotify".into(),
             version: Some("0.48.1".into()),
             state: ServiceState::Active,
@@ -311,21 +311,21 @@ fn simulated_services() -> Vec<zorvinkel_application::services::ServiceEntry> {
             web: None,
         },
         ServiceEntry {
-            group: "Musik".into(),
+            group: "Music".into(),
             name: "Mopidy".into(),
             version: Some("3.4.2".into()),
             state: ServiceState::Inactive,
             actions: all.clone(),
             web: Some(WebLink {
-                label: Some("Weboberfläche".into()),
+                label: Some("Web interface".into()),
                 scheme: WebScheme::Http,
                 port: 6680,
                 path: "/iris/".into(),
             }),
         },
         ServiceEntry {
-            group: "Fotobox".into(),
-            name: "Fotobox-App".into(),
+            group: "Photo booth".into(),
+            name: "Photo booth app".into(),
             version: None,
             state: ServiceState::Failed,
             actions: vec![ServiceAction::Start],

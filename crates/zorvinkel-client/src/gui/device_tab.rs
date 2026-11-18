@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn tab_renders_in_every_state_and_language() {
-        let mut session = Session::new("h".into(), "Fotobox".into(), true);
+        let mut session = Session::new("h".into(), "Photo booth".into(), true);
         for lang in Language::ALL {
             render_in(&mut session, lang);
             session.in_range = false;
@@ -338,11 +338,11 @@ mod tests {
             .handle(SetupRequest::Connect("simulation:device-1".into()))
             .unwrap()
             .snapshot;
-        let mut session = Session::new("h".into(), "Fotobox".into(), true);
+        let mut session = Session::new("h".into(), "Photo booth".into(), true);
         session.snapshot = snapshot;
-        assert_eq!(session.service_groups(), ["Fotobox", "Musik"]);
+        assert_eq!(session.service_groups(), ["Music", "Photo booth"]);
         session.page = Page::Services;
-        session.service_group = "Musik".into();
+        session.service_group = "Music".into();
         render(&mut session);
         assert_eq!(session.page, Page::Services);
         session.snapshot.services.clear();
@@ -361,10 +361,10 @@ mod tests {
             .handle(SetupRequest::Connect("simulation:device-1".into()))
             .unwrap()
             .snapshot;
-        let mut session = Session::new("h".into(), "Fotobox".into(), true);
+        let mut session = Session::new("h".into(), "Photo booth".into(), true);
         session.snapshot = snapshot;
         session.page = Page::Services;
-        session.service_group = "Musik".into();
+        session.service_group = "Music".into();
         session.confirm_service = Some(("Raspotify".into(), ServiceAction::Stop));
         render(&mut session);
         assert!(session.take_outbox().is_empty());
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(state("Mopidy"), ServiceState::Inactive);
         let refused = backend
             .handle(SetupRequest::ServiceAction {
-                name: "Fotobox-App".into(),
+                name: "Photo booth app".into(),
                 action: ServiceAction::Stop,
             })
             .unwrap();
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn the_wifi_page_covers_both_modes_and_one_restart_choice() {
         use zorvinkel_core::network::RestartPolicy;
-        let mut session = Session::new("h".into(), "Fotobox".into(), false);
+        let mut session = Session::new("h".into(), "Photo booth".into(), false);
         session.snapshot.wifi_available = true;
         session.snapshot.access_point_available = true;
         session.snapshot.wifi_persistence = Some(false);

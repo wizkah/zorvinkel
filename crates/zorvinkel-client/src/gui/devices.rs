@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn thirty_tiles_render_in_a_scroll_area() {
         let sessions: Vec<_> = (1..=30)
-            .map(|n| Session::new(format!("d{n}"), format!("Fotobox {n:02}"), true))
+            .map(|n| Session::new(format!("d{n}"), format!("Photo booth {n:02}"), true))
             .collect();
         let context = egui::Context::default();
         let mut events = Vec::new();

@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn groups_are_unique_and_sorted() {
-        let mut session = Session::new("simulation:device-1".into(), "Fotobox".into(), true);
+        let mut session = Session::new("simulation:device-1".into(), "Photo booth".into(), true);
         let entry = |group: &str| ServiceEntry {
             group: group.into(),
             name: "x".into(),

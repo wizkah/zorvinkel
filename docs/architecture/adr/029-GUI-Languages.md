@@ -17,4 +17,4 @@ Technical texts (protocol, logs, command line, error messages in the code) and d
 
 ## Consequences
 
-A new language needs an entry in `Language` (name, locale identifier, number format) and one column per text entry; the compiler names the missing ones. A test checks that all versions are non-empty and have the same placeholders; it does not check wording and line breaks in the interface. The service and device data of the simulation (e.g. "Fotobox", "Musik") stay German. Right-to-left scripts and fonts for non-Latin languages are not taken into account (egui bundles only Latin characters).
+A new language needs an entry in `Language` (name, locale identifier, number format) and one column per text entry; the compiler names the missing ones. A test checks that all versions are non-empty and have the same placeholders; it does not check wording and line breaks in the interface. The service and device data of the simulation (e.g. "Photo booth", "Music") are English and are not translated. Right-to-left scripts and fonts for non-Latin languages are not taken into account (egui bundles only Latin characters).

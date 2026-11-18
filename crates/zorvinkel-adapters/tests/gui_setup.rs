@@ -17,7 +17,7 @@ fn connected() -> SimulatedSetup {
 fn wifi(backend: &mut SimulatedSetup, password: &str) -> SetupUpdate {
     backend
         .handle(SetupRequest::ConnectWifi {
-            ssid: "Event-WLAN".into(),
+            ssid: "Event-WiFi".into(),
             password: password.into(),
         })
         .unwrap()
@@ -59,7 +59,7 @@ fn failed_password_is_correctable_without_losing_local_access() {
     assert_eq!(
         status.network,
         NetworkStatus::WifiConnected {
-            ssid: "Event-WLAN".into()
+            ssid: "Event-WiFi".into()
         }
     );
     assert_eq!(status.ip_reachability, IpReachability::Unverified);
