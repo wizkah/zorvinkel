@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = ["feasibility/noise-probe", "vendor/bluer", "vendor/btleplug"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+zorvinkel-core = { path = "crates/zorvinkel-core" }
+zorvinkel-application = { path = "crates/zorvinkel-application" }
+zorvinkel-protocol = { path = "crates/zorvinkel-protocol" }
+zorvinkel-adapters = { path = "crates/zorvinkel-adapters" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[patch.crates-io]
+bluer = { path = "vendor/bluer" }
+btleplug = { path = "vendor/btleplug" }

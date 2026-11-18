@@ -1,0 +1,12 @@
+[Unit]
+Description=Zorvinkel service actions
+
+[Service]
+Type=oneshot
+# Runs only actions that /etc/zorvinkel/services.d allows for the requested unit.
+ExecStart=/usr/local/libexec/zorvinkeld --run-service-requests /run/zorvinkel/service-requests /etc/zorvinkel/services.d
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelModules=true
+LockPersonality=true

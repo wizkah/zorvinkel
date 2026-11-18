@@ -1,0 +1,33 @@
+[Unit]
+Description=Zorvinkel secure BLE status
+BindsTo=bluetooth.service
+After=bluetooth.service dbus.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=zorvinkel
+Group=zorvinkel
+SupplementaryGroups=netdev
+RuntimeDirectory=zorvinkel
+RuntimeDirectoryMode=0700
+ExecStart=/usr/local/libexec/zorvinkeld --serve /var/lib/zorvinkel /run/zorvinkel/admin.sock wlan0
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/zorvinkel /run/zorvinkel
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH AF_NETLINK AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

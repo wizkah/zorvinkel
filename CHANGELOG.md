@@ -1,0 +1,149 @@
+# Changelog
+
+## Unreleased
+
+- Documentation split for publication: Vision, Requirements, product name, plan, memory and the agent instructions (`AGENTS.md`, `CLAUDE.md`) moved to the private `zorvinkel-workspace` repository, which contains this repository as the subfolder `zorvinkel/`. `docs/` keeps architecture (with ADRs), Clean Code guidelines, logo and validation, now translated to English like all other Markdown files in the repository (`packaging/BUILD.md`, `packaging/Services.md`, `THIRD-PARTY-NOTICES.md`). ADRs still cite requirement identifiers (`FR-…`, `AC-…`) from the private Requirements.
+
+- GUI: English and German. The language follows the operating system (English if it is neither) and can be switched in the tab bar; the choice is saved in the client data directory (`language`) and wins over the system language at the next start (the simulation saves nothing). All texts live in `gui/i18n.rs` (ADR-029); device state holds identifiers instead of rendered strings, so a switch applies at once. Uptime, sizes and decimals follow the language. Device names, service names/groups and Wi-Fi names are shown as the device reports them. New dependency `sys-locale`; `THIRD-PARTY-LICENSES.md` regenerated with `packaging/licenses.sh`. Verified by `fmt`, `clippy` and the client tests (45, including both languages and the saved choice); not looked at on screen, longer English or German texts may need layout tweaks.
+
+- Windows client: `zorvinkel-client.exe` now carries the application icon (`crates/zorvinkel-client/assets/zorvinkel.ico`, generated from the `--export-app-icon` artwork) as an embedded resource, so Explorer, the taskbar pin and shortcuts show it. Building needs the Windows SDK resource compiler (`rc.exe`); without it the build warns and the executable keeps the default icon. Checked by a debug build on Windows 11; Explorer display itself not viewed.
+
+- Windows client: "take over saved Wi-Fi password" reads the profile key through the WLAN API (`WlanGetProfile`). Windows normally releases the plaintext only to an elevated process for all-user profiles; otherwise the password is unavailable and has to be typed. Only the profile parser is tested; not tried against real profiles.
+
+- Windows client: the private client identity now lives in the Windows Credential Manager (ADR-028), migrating an existing file identity without changing the key, and the Wi-Fi password cache uses it as well (split over up to four items). Clippy and the adapter tests pass on Windows 11, including ignored tests against the real Credential Manager; the GUI flow and an upgrade of a real existing installation are not tried.
+
+- Switching the device's own Wi-Fi (or joining a Wi-Fi) over IP no longer reports a failure when the IP session ends with the network change: the client completes the task over Bluetooth by its operation identifier and shows the new status (and the QR code of the device's own Wi-Fi). The System page shows the current network (joined SSID, own Wi-Fi or not connected). Verified by build, `clippy` and tests; not yet tried on the Pi 4 in the GUI.
+
+- The installer adds a polkit rule (`/etc/polkit-1/rules.d/50-zorvinkel.rules`) so the device service may create its Wi-Fi profiles in NetworkManager; on a Raspberry Pi 4 the device's own Wi-Fi failed with "Insufficient privileges" (ADR-018). Not yet tried on the Pi.
+
+- Device tab: the hint "connection continues over Bluetooth" no longer stays after the session moved back to the network.
+
+- Windows Bluetooth search showed "Zorvinkel BLE probe" instead of the device name: btleplug scans passively on Windows and so never receives the scan response that carries the name. `vendor/btleplug` (0.13.5, patched to scan actively, see `PATCHES.md`) replaces the crates.io version. Builds and clippy pass; not yet tried against a real Pi on Windows.
+
+- Switching a device's Wi-Fi no longer reports "Anfrage fehlgeschlagen" when the change itself succeeded but the status read right after it hit the session the change had ended; the session now continues over Bluetooth and its status shows the outcome.
+
+- Bluetooth search: when a device's name has not arrived yet (on Windows it can sit in a scan response after the first advertisement), discovery waits up to 4 s after the first hit and reads the name again before listing, instead of showing the fallback "Zorvinkel BLE probe". Clippy passes; not yet tried against a real Pi on Windows.
+
+- Windows GUI: buttons, input fields and colours now use the Zorvinkel theme. The theme was applied to egui's default theme only, and egui switched to its own default style once Windows reported the system theme after start-up. The light theme is now fixed on all platforms (`ThemePreference::Light`, native window theme light). Checked on screen on Windows 11 (150 % scaling, light mode); dark mode not tried.
+
+- NetworkManager is now also detected by its running process, because Raspberry Pi OS starts it without a PID file and the device service used to fall back to wpa_supplicant/dhcpcd (`DhcpcdMissing`). The PID file check stays for other systems.
+
+- The search no longer lists an unregistered device twice: a network entry whose name equals a Bluetooth entry is hidden, so the first registration runs over Bluetooth (ADR-023). Registered devices merge by fingerprint; several contacts with one identity count as one device and the Bluetooth contact wins. Verified by a unit test and `clippy` on Windows; not yet tried against a real Pi in the GUI.
+
+- Windows client: the desktop GUI now runs with the real BLE backend on Windows (data in `%LOCALAPPDATA%Zorvinkel`) and starts by double click without a console window (`windows_subsystem` in builds with `gui`, `security` and `ble-client`; command-line output is not shown there). Private storage relies on the user-profile ACL instead of Unix modes.
+
+- Added `deny.toml` (license allow list, `cargo deny --all-features check licenses` passes) and `THIRD-PARTY-NOTICES.md`; reviewed the dependency licenses against GPL-3.0-or-later, including the vendored BSD-2-Clause `bluer`: no conflicts. The license check runs in CI (Linux job); the macOS app bundle and `install.sh` ship `LICENSE`, `THIRD-PARTY-NOTICES.md` and the `bluer` license. `THIRD-PARTY-LICENSES.md` holds the full license texts of all dependencies (`packaging/licenses.sh`, cargo-about) and is bundled likewise; CI regenerates it and fails on a difference.
+
+- Aligned the requirements (0.4) and Architecture (0.6) with the implemented extras on explicit instruction: IP carries all operations with mDNS announcement, session limits/renewal and correlation proof, device power control, system information, configured services with limited actions, avatars.
+
+- Tidied the device tab: "WLAN einrichten", "Eigenes WLAN" and "Neustart" are one page "WLAN" with a switch between joining a network and the device's own Wi-Fi (it follows the device while its own Wi-Fi is on). The restart behaviour has one control instead of three: "original settings" or "keep the current setting", the latter with a checkbox "later changes too" (on: last accepted configuration, off: fixed default); leaving the fixed default ends it. New `theme::segmented` control. Not looked at on screen beyond the unit render tests.
+
+- Added the restart options `LastAccepted` and `DefaultProfile` to the device service for Wi-Fi and the device's own Wi-Fi on both network stacks (ADR-025): new operations `RestartPolicyRead`/`RestartPolicySet` (capability bit 2048); "current configuration as default" keeps the active Wi-Fi saved or records the own access point as default, a set default takes precedence over "keep", is applied again after a restart and after reverting an unconfirmed change. A volatile access point is now reverted after 60 s without a confirming client, like a volatile Wi-Fi change (ADR-017 said the opposite). The GUI offers the restart page on real devices.
+
+- The device now creates its Wi-Fi name (`Zorvinkel-<hostname>`) and a random 63-character password on first start and keeps them in the protected store (`access-point-credentials/`, mode 0700/0600, ADR-026); an older plain file `access-point` is migrated and removed. Credentials are never regenerated over existing or damaged data. The client proposal stays only for devices without stored credentials.
+
+- The GUI status area lists which functions the connected device offers (ADR-027); new `SetupError::NoActiveNetwork` for a default without an active network. Verified by unit, protocol, service and simulation tests on macOS plus `cargo check`/`clippy` of the adapters for `aarch64-unknown-linux-gnu`; nothing of this ran on a Pi or a real NetworkManager. Installations must update the device service and the client together.
+
+- Added session renewal, IP-to-Bluetooth fallback, the one-time correlation proof and a connection-path display (ADR-024): the GUI renews the secured session 45 s before the 600 s / 1024-record limit (per-device checkbox "Sitzung automatisch erneuern", otherwise a warning with "Jetzt erneuern" and a clear "expired" error); a lost IP session continues over Bluetooth; new operations `CorrelationIssue`/`CorrelationRedeem` (capability bit 1024) tie a Bluetooth-to-IP switch to the running session; tiles, tab header and sidebar show Bluetooth or Netzwerk (IP). Fixed the `clippy::manual_checked_ops` failure in `system_page.rs`; `cargo clippy --workspace --all-targets --all-features -- -D warnings` now passes. Verified by unit, codec, service and simulation tests; the connection-path display was confirmed by the user on the Pi Zero W, the rest of the Pi run (renewal, fallback, proof) is outstanding. Installations must update the device service for the proof (without it the client stays on Bluetooth).
+
+- Opened the IP endpoint to all operations and added device search on the local network (ADR-023): the device serves registration, status, Wi-Fi setup, access point, system information, services and power over TCP port 47470 like over Bluetooth (long-lived sessions, 15 s handshake limit, 60 s idle limit) and announces itself via mDNS/DNS-SD (`_zorvinkel._tcp`, new dependency `mdns-sd`). The client searches Bluetooth and the network together (either may be missing), prefers the network path, falls back to Bluetooth and switches a Bluetooth session to IP once reachability is confirmed. Verified by loopback tests on macOS, including a real mDNS announce-and-find run (ignored test); the Linux service and operation on the Pi are outstanding.
+
+- Tidied the GUI tab bar: tabs and their state dots are vertically centred, and on macOS the native window buttons are centred in the bar (`gui/window_buttons.rs`, the only `unsafe` code in the client, via objc2 and raw-window-handle as macOS-only dependencies; `unsafe_code` is allowed there explicitly). Checked on macOS in the simulation GUI.
+
+- Added starting, stopping and restarting of configured services (ADR-022): `actions = [...]` in `services.d` allows them per service, a new authenticated BLE operation `ServiceAction` (capability bit 512) queues the request, and a root helper (`zorvinkel-service.path`/`.service`, `zorvinkeld --run-service-requests`) re-checks it against the configuration and runs `systemctl`. Protected units (`bluetooth`, `dbus`, `ssh`, network stacks, `zorvinkel*`, `systemd-*`) cannot be controlled. The GUI shows the allowed buttons per service and asks before stop and restart. Installations must be updated with `install.sh`, which enables the new path unit; existing `services.d` files need `actions` to opt in.
+
+- Added configured services to the device tab (ADR-021): the operator describes services in `/etc/zorvinkel/services.d/*.toml` (name, group, systemd unit, optional version command and web page); an authenticated read-only BLE operation `Services` (capability bit 256) reports version and state, and the GUI shows one tab per group with version, state and, for web pages, a button and a QR code. Setup and file format are in `packaging/Services.md`; `install.sh` creates the directory and an example file. New dependencies `toml` and `serde` for the device service. Verified by unit, protocol, service and simulation tests; the Pi run and the look of the new tabs are outstanding.
+
+- Added the authenticated IP reachability test (ADR-020): the device service listens on TCP port 47470 (capability bit 128) and answers only `Authenticate` over the secured channel; the client tests the device's reported addresses in parallel, requires the pinned device identity and shows "Erreichbar und bestätigt", "Nicht erreichbar" or "Noch nicht geprüft" as "Vom Computer erreichbar". `zorvinkeld.service` now allows `AF_INET`/`AF_INET6`, so installations must be updated. Verified by loopback integration tests on macOS; the Linux service type-checks for aarch64 (`cargo check`, no link), the Pi Zero W runs the updated service and listens on port 47470 (reachable from the Mac); the full GUI check against the Pi is outstanding.
+
+- Added system information of the device (ADR-019): authenticated read-only BLE operation `SystemInfo` (capability bit 64) reporting device model, OS, kernel, hostname, IP addresses, service version, uptime, load, free memory, free storage and, where available, SoC temperature, CPU clock and throttling flags. The GUI shows it on a new "System" page of the device tab and refreshes it with the status. Verified by unit, protocol, service and simulation tests; cross-built for ARMv6 and aarch64 Linux; a Pi run is still outstanding.
+
+- Licensed the project under GPL-3.0-or-later (`LICENSE`, `license` in all workspace crates).
+
+- Bird avatars (variant 1) are now shown in the GUI: tiles and the device header render them via resvg from the device name (cached texture per name). The generator lives in the separate MIT-licensed library [wizkah/zorvinkel-bird-avatars](https://github.com/wizkah/zorvinkel-bird-avatars) (public), a git dependency of `zorvinkel-client` (feature `gui`).
+
+- Reworked the desktop GUI: the start tab "Geräte" shows every found device as a tile in a scrollable grid with its state (connected, disconnected, running action) and a connect/disconnect button, plus "Erneut suchen". Connecting opens a tab for the device; a double click only opens the tab. Every tab except "Geräte" can be closed (closing a connected device's tab disconnects it). The connection status stays in the right sidebar. Marketing texts, the tagline, the badge and the footer note were removed; the bird and wordmark moved to the right end of the tab bar, devices get generated avatars, and the progress overlay stays (shown for the visible tab). `--simulate-gui [count]` simulates up to 100 devices that connect in parallel (default 3). A real backend still holds one connection at a time.
+
+- Added a NetworkManager adapter (ADR-018) behind the new `network-manager` feature: Wi-Fi scan, connection with rollback, volatile profiles with opt-in saving, revert of volatile changes, restart choice and the device's own Wi-Fi (NetworkManager `shared` addressing, no root helper), plus status from NetworkManager. The setup worker now drives either stack through one interface. The service starts with NetworkManager when it is running. Verified only against a simulated D-Bus interface and by cross-building; not yet tested with a real NetworkManager.
+
+- Added switching the connected device to its own Wi-Fi (access point) over authenticated BLE (`ApRead`, `ApWrite`, `ApEnable`, `ApDisable`, capability bit 32, ADR-017). The GUI proposes `Zorvinkel-<hostname>` and a random 63-character password, both editable, and shows the QR code once the device reports the access point as active. On the wpa_supplicant/dhcpcd fallback the access point is a volatile `mode=2` profile; a root helper (`zorvinkel-ap`, needs `dnsmasq-base`) provides address and DHCP. Volatile by default, kept across restarts when the existing "keep new settings" choice is on (shown on both the Wi-Fi and the access point page). Verified by unit, protocol, service and simulation tests and a manual end-to-end test on a Pi Zero W. NetworkManager is not supported yet.
+
+- Added shutdown and restart of the connected device: authenticated BLE operation `Power` (capability bit 16), a "Gerät" page in the GUI with confirmation, and root-owned systemd path units that perform the action for the unprivileged service (ADR-016). Verified by unit, protocol, service and simulation tests; not yet on a real Pi.
+
+- Added a second Wi-Fi password button: "Zwischengespeichertes Passwort nutzen". After a device accepted a password, the client remembers it in one macOS keychain item (`org.zorvinkel.client.wifi`, all networks in one blob, so approval is needed at most once for the whole area). The system button is now "WLAN-Passwort vom System holen". Not yet verified against the real keychain.
+
+- Implemented "Gespeichertes Passwort übernehmen" on macOS: on request the password of the entered network is read via CoreWLAN `CWKeychainFindWiFiPassword` (user, then system keychain; macOS asks for approval) into the password field. Other platforms and the simulation report it as unavailable. The workspace `unsafe_code` lint is `deny` instead of `forbid`; only `credentials.rs` allows the one FFI call. Not yet verified against a real keychain entry.
+
+- Added an eye toggle to the Wi-Fi password field in the desktop GUI to show or hide the entered password.
+
+- A volatile Wi-Fi change is reverted when it is lost for three checks in a row (5 s apart) or when no authenticated client talks to the device again within 60 s (e.g. Bluetooth became unusable because of the change). Reverting reloads the saved wpa_supplicant configuration (`RECONFIGURE`), dropping temporary profiles. A marker file keeps the pending revert across a service restart, e.g. after a BlueZ crash. Persisted connections are not affected.
+
+- Added a GUI choice on the Wi-Fi page: keep new Wi-Fi settings after a restart (overwriting the originals) or use the original settings again. It is an authenticated BLE operation (`WifiPersistence`, capability bit 8) that switches the same flag as the local admin command and only affects connections made afterwards.
+
+- Added opt-in persistence for the wpa_supplicant fallback (default off, local `zorvinkel-admin wifi-persistence on|off|status`): after a successful connection wpa_supplicant saves only the active owned profile; foreign profiles stay untouched.
+
+- Added read-only startup selection of the network stack (NetworkManager preferred, wpa_supplicant/dhcpcd fallback requiring both services); an unsupported or unclear stack now starts the service without network setup instead of failing.
+
+- Defined NetworkManager preference and wpa_supplicant/dhcpcd fallback with device capability checks.
+
+- Added macOS client and Raspberry Pi Zero W cross-build scripts with verified ARMv6 and ARM64 D-Bus packages and automatic setup of missing cross-build tools.
+
+- Named the macOS app Zorvinkel without suffixes; show device hostname alone and disambiguate only distinct registered identities sharing a name. Replaced per-frame SVG rasterization with reusable GPU layers and display-synchronized animation.
+
+- Use the Linux system hostname as the BLE device-name prefix while preserving the existing device suffix and cryptographic identity.
+
+- Made bounded Bluetooth crash recovery and dependent BLE re-registration mandatory in the Linux installer; installed and fault-tested the systemd rules on the Pi without changing identity or network configuration.
+
+- Added BLE connection-phase error context; restored the test Pi’s failed Bluetooth service and verified repeated authenticated reconnection.
+
+- Kept automatic GUI status refreshes silent and interactive; placed welcome-sized progress with action text in a window-centered overlay without cancellation controls or layout shifts. User actions during a refresh are deferred without being lost.
+
+- Connected volatile Wi-Fi scanning and setup to authenticated BLE jobs and the desktop GUI, with capability gating, durable credential-free operation journaling, reconnect polling and a bounded setup worker. Verified native GUI discovery, secure connection and fresh Wi-Fi scanning against the updated Pi service.
+
+- Added an experimental volatile wpa_supplicant network adapter for existing dhcpcd installations, bounded local socket communication, temporary WPA2 profiles, connection rollback and a manual probe. AP commands remain unsupported.
+
+- Increased terrain line width and opacity so the progress animation remains visible at GUI size.
+
+- Replaced the GUI busy spinner with the embedded SVG bird animation, including wingbeats and scrolling terrain.
+
+- Added an animated SVG loading indicator with a stationary bird, faster eased single and tightly spaced double wingbeats with uneven timing, longer glide pauses a stationary tail and a tighter inward wing stroke and mostly transparent downward-scrolling terrain.
+
+- Added the macOS bundle icon and automatic ICNS generation from the existing application artwork.
+
+- Added macOS Keychain storage for client identities with verified, restart-safe migration preserving existing registrations and no file fallback on access failure.
+
+- Integrated persistent secure BLE registration and status with the desktop GUI, root-verified local administration, Linux service installation and a local macOS app bundle. Added separate secure framing, a durable device catalog and awaited BlueR shutdown.
+
+- Replaced the five-second BLE discovery snapshot with bounded event collection, deduplication and a short collection window after the first match; verified repeated discovery with the Pi’s original advertising interval.
+
+- Added a pinned BlueR compatibility patch for BlueZ 5.50, regression tests, a confirmed-write workaround, macOS peripheral handle renewal and reconnect-safe session cleanup. Two native BLE exchanges passed; automatic discovery remains unreliable.
+
+- Passed 90 cross-compiled workspace tests on Raspberry Pi Zero W, including Linux persistence and Noise security flows.
+
+- Integrated the macOS title bar into the light branded header while retaining native window controls.
+
+- Replaced the default eframe application icon with the embedded bird logo on a light blue-gray background, with rounded corners and inset margins on macOS.
+
+- Refined the setup GUI with embedded bird and wordmark assets, a blue theme, rounded cards and clearer action styling.
+
+- Added the Noise-protected status protocol, generated persistent identities, authenticated registration and reconnect, session revocation, security regression tests and an encrypted in-memory CLI demo.
+
+- Added transparent bird and wordmark SVGs with PNG previews; fine contours and reconstructed color transitions still differ from the source.
+
+- Added an optional native setup GUI with a simulated device, asynchronous requests, Wi-Fi recovery, access point QR display and restart settings.
+
+- Added bounded BLE probe framing, fragmentation and reconnect tests, optional native client and Linux GATT probe server, and BLE feature builds in CI.
+
+- Added setup key authorization, persistent device trust and opaque Unix identity storage.
+
+- Accepted TOFU for first contact and specified optional client preauthorization and device key pinning.
+
+- Added transactional registration state, targeted grants, revocation, network operation journaling, restart policies and Unix snapshot persistence.
+- Added recovery, concurrency, corruption and commit-failure tests.
+
+- Added the MVP Rust workspace, simulated discovery/status flows and three-platform build checks.
+
+- Grouped application files and documentation under `zorvinkel/`.
+- Added document maintenance rules and a development memory.
+- Removed obsolete ADR-001; its transport decision is covered by the current architecture.
+- Initialized a Git repository with Rust and local-file ignore rules.

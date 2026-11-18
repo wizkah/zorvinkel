@@ -1,0 +1,18 @@
+# Lizenztexte der Abhängigkeiten
+
+Erzeugt mit cargo-about (`packaging/licenses.sh`). Gesamtübersicht und
+Hinweise: `THIRD-PARTY-NOTICES.md`.
+
+{{#each licenses}}
+## {{{name}}}
+
+Verwendet von:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+```text
+{{{text}}}
+```
+
+{{/each}}

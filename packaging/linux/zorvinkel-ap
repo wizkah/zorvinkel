@@ -1,0 +1,51 @@
+#!/bin/sh
+# Root helper of the Zorvinkel access point. wpa_supplicant already runs the radio in access
+# point mode; this gives the interface a fixed address and serves DHCP until the request file
+# /run/zorvinkel/ap-up disappears. It reports through ap-ready or ap-failed in the same directory.
+set -u
+interface=${1:?Usage: zorvinkel-ap interface}
+dir=/run/zorvinkel
+address=192.168.4.1
+dnsmasq_pid=
+
+cleanup() {
+    rm -f "$dir/ap-ready"
+    if [ -n "$dnsmasq_pid" ]; then
+        kill "$dnsmasq_pid" 2>/dev/null
+        wait "$dnsmasq_pid" 2>/dev/null
+    fi
+    ip -4 addr flush dev "$interface" 2>/dev/null
+    # Hand the interface back to the DHCP client.
+    dhcpcd "$interface" >/dev/null 2>&1
+    return 0
+}
+fail() {
+    rm -f "$dir/ap-up"
+    : > "$dir/ap-failed"
+    exit 1
+}
+trap cleanup EXIT
+trap 'exit 0' TERM INT
+
+command -v dnsmasq >/dev/null 2>&1 || fail
+# The DHCP client must not configure the interface while it serves addresses.
+dhcpcd -k "$interface" >/dev/null 2>&1
+ip -4 addr flush dev "$interface" || fail
+ip addr add "$address/24" dev "$interface" || fail
+dnsmasq --keep-in-foreground --conf-file=/dev/null --pid-file= --port=0 \
+    --interface="$interface" --bind-interfaces --listen-address="$address" \
+    --dhcp-range=192.168.4.10,192.168.4.100,255.255.255.0,12h --dhcp-authoritative \
+    --no-hosts --no-resolv &
+dnsmasq_pid=$!
+sleep 1
+kill -0 "$dnsmasq_pid" 2>/dev/null || fail
+: > "$dir/ap-ready"
+while [ -e "$dir/ap-up" ] && kill -0 "$dnsmasq_pid" 2>/dev/null; do
+    sleep 1
+done
+# A crashed DHCP server must not leave the request behind, or the path unit would restart us.
+if [ -e "$dir/ap-up" ]; then
+    rm -f "$dir/ap-up"
+    : > "$dir/ap-failed"
+fi
+exit 0

@@ -1,0 +1,9 @@
+[Unit]
+Description=Zorvinkel device power request (%i)
+
+[Path]
+# The unprivileged service creates this file; the root unit below performs the action.
+PathExists=/run/zorvinkel/%i
+
+[Install]
+WantedBy=multi-user.target

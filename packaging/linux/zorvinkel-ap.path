@@ -1,0 +1,11 @@
+[Unit]
+Description=Zorvinkel access point request
+
+[Path]
+# The unprivileged service creates this file; the root unit starts addressing and DHCP and
+# stops again when the file is removed.
+PathExists=/run/zorvinkel/ap-up
+Unit=zorvinkel-ap.service
+
+[Install]
+WantedBy=multi-user.target

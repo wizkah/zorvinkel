@@ -1,0 +1,19 @@
+[package]
+name = "zorvinkel-noise-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+snow = "0.10"
+btleplug = { version = "0.13.5", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"], optional = true }
+
+[features]
+ble = ["dep:btleplug", "dep:tokio"]
+
+[[example]]
+name = "ble_adapter"
+required-features = ["ble"]
+
+[workspace]

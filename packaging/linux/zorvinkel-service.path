@@ -1,0 +1,9 @@
+[Unit]
+Description=Zorvinkel service action requests
+
+[Path]
+# The unprivileged service queues a request file here; the root unit below performs it.
+DirectoryNotEmpty=/run/zorvinkel/service-requests
+
+[Install]
+WantedBy=multi-user.target

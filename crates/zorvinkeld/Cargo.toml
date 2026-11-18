@@ -1,0 +1,19 @@
+[package]
+name = "zorvinkeld"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+zorvinkel-application.workspace = true
+zorvinkel-adapters.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "signal"], optional = true }
+
+[features]
+security = ["zorvinkel-adapters/security"]
+network-manager = ["zorvinkel-adapters/network-manager"]
+ble-server = ["zorvinkel-adapters/ble-server", "dep:tokio"]

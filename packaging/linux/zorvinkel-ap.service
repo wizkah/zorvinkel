@@ -1,0 +1,8 @@
+[Unit]
+Description=Zorvinkel access point addressing and DHCP
+After=dhcpcd.service wpa_supplicant.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/zorvinkel-ap wlan0
+Restart=no

@@ -1,0 +1,7 @@
+[Unit]
+Description=Zorvinkel device power action (%i)
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/rm -f -- /run/zorvinkel/%i
+ExecStart=/bin/systemctl --no-block %i

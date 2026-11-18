@@ -1,0 +1,20 @@
+# Beispiel: Kopieren nach /etc/zorvinkel/services.d/raspotify.toml (Endung .toml) und anpassen.
+# Beschreibung aller Schlüssel: packaging/Services.md
+name = "Raspotify"
+group = "Musik"
+unit = "raspotify.service"
+
+# Auf dem Gerät prüfen: der Befehl muss die Version auf stdout ausgeben
+# (Ausgabe „librespot 0.3.1 …“, das zweite Wort ist die Version).
+version_command = ["/usr/bin/librespot", "--version"]
+version_word = 2
+
+# Optional: Aktionen, die der Client auslösen darf (start, stop, restart). Ohne den Schlüssel
+# ist der Dienst nur zur Anzeige da.
+actions = ["start", "stop", "restart"]
+
+# Optional: Weboberfläche des Dienstes.
+# [web]
+# label = "Weboberfläche"
+# port = 8080
+# path = "/"
