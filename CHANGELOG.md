@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New crate `zorvinkel-terminal` (first part of the terminal, ADR-030): SSH session over IP with password login (`russh`, `ring` backend), attaching to `tmux new-session -A -s zorvinkel`, automatic reconnect with backoff and reattach, and terminal emulation (`vt100`). Passwords live in a zeroizing buffer for the session only; host keys are checked by a caller-supplied verifier. Tested with unit tests and an in-process SSH server (login, wrong password, untrusted host key, resize, exit status, close). Not yet wired into the GUI, not tried against a real `sshd`, and `THIRD-PARTY-LICENSES.md` is not regenerated (`cargo-deny`/`cargo-about` are not installed on the build machine); the license check of the new dependencies is still to do.
+
 - ADR-031 (proposed): the terminal over Bluetooth gets its own tunnel channel with derived keys, rekeying and flow control, independent of the status session's 600 s / 1024-record limits. Decision draft only; nothing implemented.
 
 - ADR-030: the interactive terminal will be a real SSH session run by the client, over IP or tunnelled through the Bluetooth channel (on by default, operator can disable), resumable with `tmux`. Decision only; nothing implemented.
