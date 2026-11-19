@@ -8,6 +8,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 license = "GPL-3.0-or-later"
+repository = "https://github.com/wizkah/zorvinkel"
 
 [workspace.dependencies]
 zorvinkel-core = { path = "crates/zorvinkel-core" }
