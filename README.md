@@ -9,7 +9,7 @@
 
 Zorvinkel is a local administration tool for headless Linux devices such as a Raspberry Pi. It lets people set up and recover a device's network connection without a screen or keyboard attached to it, even when the device has no network at all.
 
-A graphical client (macOS, Windows, Linux) finds the device nearby over Bluetooth Low Energy (BLE), registers with it, and sets up Wi-Fi. There is no cloud and no account. Once the device is on a network, the client reaches it over IP with the same operations.
+A graphical client (macOS, Windows, Linux) finds the device nearby over Bluetooth Low Energy (BLE) and, once it is on the local network, via mDNS/DNS-SD. It registers with the device and sets up Wi-Fi. There is no cloud and no account. Once the device is on a network, the client reaches it over IP with the same operations.
 
 > **Status: early development (v0.1, pre-release).** The design is a draft, and parts of the implementation have only been tried on specific hardware and operating systems. Read the [validation notes](docs/validation/) before relying on it, and do not use it to protect anything that matters yet.
 
