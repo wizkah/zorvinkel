@@ -5,6 +5,7 @@
   <img src="docs/logo/zorvinkel-wordmark.svg" alt="Zorvinkel" width="320">
 </p>
 <p align="center"><strong>Your device. Always within reach.</strong></p>
+<p align="center"><a href="https://github.com/wizkah/zorvinkel/actions/workflows/rust.yml"><img src="https://github.com/wizkah/zorvinkel/actions/workflows/rust.yml/badge.svg" alt="CI"></a></p>
 
 Zorvinkel is a local administration tool for headless Linux devices such as a Raspberry Pi. It lets people set up and recover a device's network connection without a screen or keyboard attached to it, even when the device has no network at all.
 
