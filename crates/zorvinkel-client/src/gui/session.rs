@@ -39,6 +39,8 @@ pub enum Page {
     /// Services of the group named by `Session::service_group`.
     Services,
     Power,
+    /// Interactive SSH terminal; offered once the device reported a network address.
+    Terminal,
 }
 /// What the Wi-Fi page is about: joining another network or offering the device's own.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -168,6 +170,8 @@ pub struct Session {
     pub error: Option<SetupError>,
     /// Renews the secured session before it ends instead of letting the device disconnect.
     pub auto_renew: bool,
+    /// Login, host key question or running terminal; dropped when the device is disconnected.
+    pub terminal: Option<super::terminal_page::TerminalPanel>,
     outbox: Vec<SetupRequest>,
 }
 
@@ -197,6 +201,7 @@ impl Session {
             notice: None,
             error: None,
             auto_renew: true,
+            terminal: None,
             outbox: Vec::new(),
         }
     }
@@ -232,6 +237,7 @@ impl Session {
         self.submit(SetupRequest::Connect(self.handle.clone()));
     }
     pub fn disconnect(&mut self) {
+        self.terminal = None;
         self.submit(SetupRequest::Disconnect);
     }
     /// A connected device whose secured session is about to end and should be renewed now.
@@ -265,6 +271,7 @@ impl Session {
     }
     /// Forgets the connection after the backend ended it, e.g. because another device took over.
     pub fn mark_disconnected(&mut self, reason: Notice) {
+        self.terminal = None;
         self.snapshot = SetupSnapshot::default();
         self.notice = Some(reason);
     }

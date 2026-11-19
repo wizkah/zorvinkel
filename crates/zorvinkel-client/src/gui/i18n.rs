@@ -465,6 +465,57 @@ texts! {
     ServiceStarting { en: "Starting", de: "Startet" },
     ServiceStopped { en: "Stopped", de: "Gestoppt" },
     ServiceUnknown { en: "Unknown", de: "Unbekannt" },
+    PageTerminal { en: "Terminal", de: "Terminal" },
+    TerminalIntro {
+        en: "Log in with an account of the device. The password is used once; the terminal then continues with a temporary key that exists only in this program.",
+        de: "Mit einem Konto des Geräts anmelden. Das Passwort wird nur einmal verwendet; das Terminal läuft danach mit einem vorübergehenden Schlüssel weiter, der nur in diesem Programm existiert.",
+    },
+    TerminalUser { en: "User", de: "Benutzer" },
+    TerminalPassword { en: "Password", de: "Passwort" },
+    TerminalOpen { en: "Open terminal", de: "Terminal öffnen" },
+    TerminalClose { en: "Close terminal", de: "Terminal schließen" },
+    TerminalNoAddress {
+        en: "The device has not reported a network address yet. Connect it to a network first.",
+        de: "Das Gerät hat noch keine Netzwerkadresse gemeldet. Zuerst mit einem Netzwerk verbinden.",
+    },
+    TerminalConnecting { en: "Connecting …", de: "Verbindung wird aufgebaut …" },
+    TerminalConnected { en: "Connected", de: "Verbunden" },
+    TerminalReconnecting {
+        en: "Connection lost, reconnecting (attempt {0}) …",
+        de: "Verbindung unterbrochen, Wiederverbindung (Versuch {0}) …",
+    },
+    TerminalLoginFailed {
+        en: "Login failed. Check user and password.",
+        de: "Anmeldung fehlgeschlagen. Benutzer und Passwort prüfen.",
+    },
+    TerminalLoginAgain {
+        en: "The login was not accepted any more. Please log in again.",
+        de: "Die Anmeldung wurde nicht mehr akzeptiert. Bitte erneut anmelden.",
+    },
+    TerminalHostKeyNew {
+        en: "This is the first connection to the device over SSH. Compare the fingerprint of its host key before you trust it:",
+        de: "Erste SSH-Verbindung zu diesem Gerät. Den Fingerabdruck seines Host-Schlüssels vergleichen, bevor ihm vertraut wird:",
+    },
+    TerminalHostKeyChanged {
+        en: "The host key of the device has changed. This can happen after a reinstallation, but also when someone intercepts the connection. New fingerprint:",
+        de: "Der Host-Schlüssel des Geräts hat sich geändert. Das kommt nach einer Neuinstallation vor, aber auch, wenn jemand die Verbindung abfängt. Neuer Fingerabdruck:",
+    },
+    TerminalTrustKey { en: "Trust this key", de: "Diesem Schlüssel vertrauen" },
+    TerminalReplaceKey { en: "Replace the stored key", de: "Gespeicherten Schlüssel ersetzen" },
+    TerminalCancel { en: "Cancel", de: "Abbrechen" },
+    TerminalOpenAgain { en: "Open again", de: "Erneut öffnen" },
+    TerminalFinished {
+        en: "The terminal session ended (status {0}).",
+        de: "Die Terminalsitzung wurde beendet (Status {0}).",
+    },
+    TerminalTmuxMissing {
+        en: "`tmux` is not installed on the device. Install it (for example `sudo apt install tmux`) and open the terminal again.",
+        de: "Auf dem Gerät ist `tmux` nicht installiert. Es installieren (zum Beispiel `sudo apt install tmux`) und das Terminal erneut öffnen.",
+    },
+    TerminalFailed {
+        en: "The terminal could not be opened: {0}",
+        de: "Das Terminal konnte nicht geöffnet werden: {0}",
+    },
 }
 
 #[cfg(test)]

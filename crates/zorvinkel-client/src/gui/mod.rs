@@ -1,5 +1,6 @@
 mod device_tab;
 mod devices;
+mod host_keys;
 mod hub;
 mod i18n;
 mod pages;
@@ -7,6 +8,9 @@ mod progress;
 mod services_page;
 mod session;
 mod system_page;
+mod terminal_colors;
+mod terminal_input;
+mod terminal_page;
 mod theme;
 #[cfg(target_os = "macos")]
 mod window_buttons;
@@ -38,6 +42,7 @@ struct App {
     simulation: bool,
     language: Language,
     language_store: LanguageStore,
+    host_keys: host_keys::HostKeyStore,
     hub: Hub,
     sessions: Vec<Session>,
     view: View,
@@ -58,16 +63,21 @@ pub fn export_app_icon(path: &std::path::Path) -> Result<(), image::ImageError> 
 
 /// Simulated devices that can be connected side by side.
 pub fn run(device_count: usize) -> eframe::Result {
-    run_with(true, LanguageStore::none(), move |wake| {
-        Hub::parallel_connections(
-            SimulatedSetup::with_device_count(device_count),
-            Box::new(move || {
-                Box::new(SimulatedSetup::with_device_count(device_count).discovered())
-            }),
-            wake,
-            SIMULATION_DELAY,
-        )
-    })
+    run_with(
+        true,
+        LanguageStore::none(),
+        host_keys::HostKeyStore::none(),
+        move |wake| {
+            Hub::parallel_connections(
+                SimulatedSetup::with_device_count(device_count),
+                Box::new(move || {
+                    Box::new(SimulatedSetup::with_device_count(device_count).discovered())
+                }),
+                wake,
+                SIMULATION_DELAY,
+            )
+        },
+    )
 }
 
 /// A real backend holds one connection at a time.
@@ -79,6 +89,7 @@ pub fn run_backend(
     run_with(
         false,
         LanguageStore::in_directory(settings_directory),
+        host_keys::HostKeyStore::in_directory(settings_directory),
         move |wake| Hub::single_connection(backend, wake, std::time::Duration::ZERO),
     )
 }
@@ -86,6 +97,7 @@ pub fn run_backend(
 fn run_with(
     simulation: bool,
     store: LanguageStore,
+    host_keys: host_keys::HostKeyStore,
     hub: impl FnOnce(Box<dyn Fn() + Send + Sync>) -> Hub + 'static,
 ) -> eframe::Result {
     let icon = theme::app_icon().map_err(|error| eframe::Error::AppCreation(Box::new(error)))?;
@@ -118,6 +130,7 @@ fn run_with(
                 simulation,
                 language: store.load().unwrap_or_else(Language::detect),
                 language_store: store,
+                host_keys,
                 hub: hub(Box::new(move || context.request_repaint())),
                 sessions: Vec::new(),
                 view: View::Devices,
@@ -525,10 +538,14 @@ impl eframe::App for App {
             .show(context, |ui| match self.view.clone() {
                 View::Devices => self.show_devices(ui),
                 View::Device(handle) => {
-                    if let Some(session) = self.session_mut(&handle) {
+                    let session = self
+                        .sessions
+                        .iter_mut()
+                        .find(|session| session.handle == handle);
+                    if let Some(session) = session {
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
-                            .show(ui, |ui| session.show_tab(ui, lang));
+                            .show(ui, |ui| session.show_tab(ui, lang, &mut self.host_keys));
                     }
                 }
             });
@@ -557,6 +574,7 @@ mod tests {
             simulation: true,
             language: Language::English,
             language_store: LanguageStore::none(),
+            host_keys: host_keys::HostKeyStore::none(),
             hub: Hub::parallel_connections(
                 SimulatedSetup::with_device_count(device_count),
                 Box::new(move || {

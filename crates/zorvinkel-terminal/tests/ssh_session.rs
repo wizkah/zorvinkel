@@ -174,6 +174,7 @@ async fn attaches_to_tmux_and_relays_a_session() {
         connector(&address, PASSWORD, &fingerprint),
         size(),
         RetryPolicy::default(),
+        || {},
     );
     assert!(matches!(
         status(&mut terminal).await,
@@ -213,6 +214,7 @@ async fn wrong_password_fails_without_retrying() {
         connector(&address, "wrong", &fingerprint),
         size(),
         RetryPolicy::default(),
+        || {},
     );
     status(&mut terminal).await;
     assert!(matches!(
@@ -228,6 +230,7 @@ async fn untrusted_host_key_is_rejected_before_authentication() {
         connector(&address, PASSWORD, "SHA256:someone-else"),
         size(),
         RetryPolicy::default(),
+        || {},
     );
     status(&mut terminal).await;
     assert!(matches!(
@@ -270,6 +273,7 @@ async fn logs_in_with_a_private_key() {
         ),
         size(),
         RetryPolicy::default(),
+        || {},
     );
     status(&mut terminal).await;
     assert!(matches!(
@@ -296,7 +300,7 @@ async fn real_device_session() {
             true
         }),
     );
-    let mut terminal = ResumableTerminal::start(connector, size(), RetryPolicy::default());
+    let mut terminal = ResumableTerminal::start(connector, size(), RetryPolicy::default(), || {});
     status(&mut terminal).await;
     assert!(matches!(
         status(&mut terminal).await,

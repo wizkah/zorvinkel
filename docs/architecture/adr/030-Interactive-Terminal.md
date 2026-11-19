@@ -1,6 +1,6 @@
 # ADR-030 – Interactive terminal over SSH
 
-**Status:** Accepted (not yet implemented)
+**Status:** Accepted. Implemented over IP (client terminal page, `zorvinkel-terminal`); the Bluetooth tunnel is proposed in ADR-031.
 
 ## Context
 

@@ -2,7 +2,7 @@ use crate::{
     TerminalSize,
     session::{Command, ConnectError, EndReason, SessionClosed, TerminalEvent, TerminalSession},
 };
-use std::{future::Future, pin::pin, time::Duration};
+use std::{future::Future, pin::pin, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::sleep};
 
 const QUEUE_LENGTH: usize = 64;
@@ -78,9 +78,20 @@ pub struct ResumableTerminal {
 }
 impl ResumableTerminal {
     /// Starts connecting in the background; needs a running Tokio runtime.
-    pub fn start<C: Connector>(connector: C, size: TerminalSize, policy: RetryPolicy) -> Self {
+    /// `wake` runs after every event and once more when the terminal stopped, so a GUI knows when
+    /// to poll [`Self::try_next_event`].
+    pub fn start<C: Connector>(
+        connector: C,
+        size: TerminalSize,
+        policy: RetryPolicy,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
         let (commands, command_queue) = mpsc::channel(QUEUE_LENGTH);
-        let (event_sender, events) = mpsc::channel(QUEUE_LENGTH);
+        let (sender, events) = mpsc::channel(QUEUE_LENGTH);
+        let event_sender = Notifier {
+            sender,
+            wake: Arc::new(wake),
+        };
         tokio::spawn(supervise(
             connector,
             size,
@@ -98,6 +109,30 @@ impl ResumableTerminal {
     }
     pub async fn close(&self) {
         let _ = self.send(Command::Close).await;
+    }
+    /// For callers outside async code; the queue is bounded, so a full queue drops the input.
+    pub fn try_input(&self, bytes: Vec<u8>) -> Result<(), SessionClosed> {
+        self.try_send(Command::Input(bytes))
+    }
+    pub fn try_resize(&self, size: TerminalSize) -> Result<(), SessionClosed> {
+        self.try_send(Command::Resize(size))
+    }
+    pub fn try_close(&self) {
+        let _ = self.try_send(Command::Close);
+    }
+    /// `Err` once the terminal stopped for good and everything was delivered.
+    pub fn try_next_event(&mut self) -> Result<Option<ResumableEvent>, SessionClosed> {
+        match self.events.try_recv() {
+            Ok(event) => Ok(Some(event)),
+            Err(mpsc::error::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::error::TryRecvError::Disconnected) => Err(SessionClosed),
+        }
+    }
+    fn try_send(&self, command: Command) -> Result<(), SessionClosed> {
+        match self.commands.try_send(command) {
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(SessionClosed),
+            _ => Ok(()),
+        }
     }
     /// `None` once the terminal stopped for good.
     pub async fn next_event(&mut self) -> Option<ResumableEvent> {
@@ -119,10 +154,17 @@ async fn supervise<C: Connector>(
     size: TerminalSize,
     policy: RetryPolicy,
     commands: mpsc::Receiver<Command>,
-    events: mpsc::Sender<ResumableEvent>,
+    events: Notifier,
 ) {
+    let wake = events.wake.clone();
     run(&mut connector, size, policy, commands, events).await;
     connector.release().await;
+    wake();
+}
+
+struct Notifier {
+    sender: mpsc::Sender<ResumableEvent>,
+    wake: Arc<dyn Fn() + Send + Sync>,
 }
 
 async fn run<C: Connector>(
@@ -130,7 +172,7 @@ async fn run<C: Connector>(
     mut size: TerminalSize,
     policy: RetryPolicy,
     mut commands: mpsc::Receiver<Command>,
-    events: mpsc::Sender<ResumableEvent>,
+    events: Notifier,
 ) {
     // `attempt` numbers the tries shown to the user; `failures` counts consecutive failed tries
     // and drives the waiting time.
@@ -203,7 +245,7 @@ async fn run<C: Connector>(
 async fn attached(
     mut session: TerminalSession,
     commands: &mut mpsc::Receiver<Command>,
-    events: &mpsc::Sender<ResumableEvent>,
+    events: &Notifier,
     size: &mut TerminalSize,
 ) -> Outcome {
     loop {
@@ -257,8 +299,10 @@ async fn interruptible<F: Future>(
 }
 
 /// `false` when nobody listens any more.
-async fn emit(events: &mpsc::Sender<ResumableEvent>, event: ResumableEvent) -> bool {
-    events.send(event).await.is_ok()
+async fn emit(events: &Notifier, event: ResumableEvent) -> bool {
+    let delivered = events.sender.send(event).await.is_ok();
+    (events.wake)();
+    delivered
 }
 
 #[cfg(test)]
@@ -309,7 +353,12 @@ mod tests {
         TerminalSize::new(80, 24).unwrap()
     }
     fn start(results: Vec<Result<TerminalSession, ConnectError>>) -> ResumableTerminal {
-        ResumableTerminal::start(Scripted(results.into()), size(), RetryPolicy::default())
+        ResumableTerminal::start(
+            Scripted(results.into()),
+            size(),
+            RetryPolicy::default(),
+            || {},
+        )
     }
     async fn status(terminal: &mut ResumableTerminal) -> ConnectionStatus {
         match terminal.next_event().await {
@@ -377,7 +426,8 @@ mod tests {
             cap: Duration::from_secs(2),
             max_attempts: 2,
         };
-        let mut terminal = ResumableTerminal::start(Scripted(VecDeque::new()), size(), policy);
+        let mut terminal =
+            ResumableTerminal::start(Scripted(VecDeque::new()), size(), policy, || {});
         assert!(matches!(
             status(&mut terminal).await,
             ConnectionStatus::Connecting
@@ -447,7 +497,7 @@ mod tests {
                 std::future::pending().await
             }
         }
-        let mut terminal = ResumableTerminal::start(Never, size(), RetryPolicy::default());
+        let mut terminal = ResumableTerminal::start(Never, size(), RetryPolicy::default(), || {});
         status(&mut terminal).await;
         terminal.close().await;
         assert!(terminal.next_event().await.is_none());

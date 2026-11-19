@@ -5403,11 +5403,13 @@ dependencies = [
  "sys-locale",
  "tokio",
  "winresource",
+ "zeroize",
  "zorvinkel-adapters",
  "zorvinkel-application",
  "zorvinkel-bird-avatars",
  "zorvinkel-core",
  "zorvinkel-protocol",
+ "zorvinkel-terminal",
 ]
 
 [[package]]

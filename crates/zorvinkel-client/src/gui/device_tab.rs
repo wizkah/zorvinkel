@@ -1,4 +1,5 @@
 //! Content of a device tab: connection control, messages and the setup pages.
+use super::host_keys::HostKeyStore;
 use super::{
     i18n::{Language, Text},
     session::{ConnectionState, Page, Session},
@@ -36,7 +37,10 @@ pub fn state_label(ui: &mut egui::Ui, state: ConnectionState, lang: Language) {
 }
 
 impl Session {
-    pub fn show_tab(&mut self, ui: &mut egui::Ui, lang: Language) {
+    pub fn show_tab(&mut self, ui: &mut egui::Ui, lang: Language, host_keys: &mut HostKeyStore) {
+        if let Some(terminal) = &mut self.terminal {
+            terminal.poll(&self.handle, host_keys);
+        }
         self.header(ui, lang);
         if let Some(error) = self.error {
             ui.add_space(8.0);
@@ -76,7 +80,7 @@ impl Session {
             });
             return;
         }
-        self.show_pages(ui, lang);
+        self.show_pages(ui, lang, host_keys);
     }
     fn header(&mut self, ui: &mut egui::Ui, lang: Language) {
         let state = self.state();
@@ -112,7 +116,7 @@ impl Session {
             }
         }
     }
-    fn show_pages(&mut self, ui: &mut egui::Ui, lang: Language) {
+    fn show_pages(&mut self, ui: &mut egui::Ui, lang: Language, host_keys: &mut HostKeyStore) {
         let wifi_offered =
             self.simulation || self.snapshot.wifi_available || self.snapshot.access_point_available;
         let system_offered = self.snapshot.system_info_available;
@@ -121,6 +125,7 @@ impl Session {
             || (!system_offered && self.page == Page::System)
             || (self.page == Page::Services && !groups.contains(&self.service_group))
             || (!self.snapshot.power_available && self.page == Page::Power)
+            || (!self.terminal_offered() && self.page == Page::Terminal)
         {
             self.page = if wifi_offered {
                 Page::Wifi
@@ -149,6 +154,9 @@ impl Session {
                 if self.snapshot.power_available {
                     ui.selectable_value(&mut self.page, Page::Power, lang.t(Text::PageDevice));
                 }
+                if self.terminal_offered() {
+                    ui.selectable_value(&mut self.page, Page::Terminal, lang.t(Text::PageTerminal));
+                }
             });
         });
         ui.add_space(8.0);
@@ -159,6 +167,7 @@ impl Session {
                 Page::System => self.system(ui, lang),
                 Page::Services => self.services(ui, lang),
                 Page::Power => self.power(ui, lang),
+                Page::Terminal => self.terminal_page(ui, lang, host_keys),
             }
         });
     }
@@ -292,8 +301,10 @@ mod tests {
     }
     fn render_in(session: &mut Session, lang: Language) {
         let context = egui::Context::default();
+        let mut host_keys = HostKeyStore::none();
         let _ = context.run(egui::RawInput::default(), |context| {
-            egui::CentralPanel::default().show(context, |ui| session.show_tab(ui, lang));
+            egui::CentralPanel::default()
+                .show(context, |ui| session.show_tab(ui, lang, &mut host_keys));
         });
     }
 

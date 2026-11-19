@@ -17,3 +17,4 @@ pub use session::{
     ConnectError, EndReason, HostKeyVerifier, SessionClosed, SshConnector, TerminalEvent,
     TerminalSession,
 };
+pub use vt100;
