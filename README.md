@@ -62,7 +62,7 @@ Real Bluetooth needs the `ble-client` feature on the client and `security,ble-se
 
 Packaging and installation:
 
-- [packaging/BUILD.md](packaging/BUILD.md): macOS app bundle and cross-builds for the Raspberry Pi (32 and 64 bit).
+- [packaging/BUILD.md](packaging/BUILD.md): macOS app bundle, Windows client build and cross-builds for the Raspberry Pi (32 and 64 bit).
 - `packaging/linux/install.sh`: installs the device service on the Pi.
 - [packaging/Services.md](packaging/Services.md): showing device services in the client.
 
