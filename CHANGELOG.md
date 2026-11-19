@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- ADR-030: the interactive terminal will be a real SSH session run by the client, over IP or tunnelled through the Bluetooth channel (on by default, operator can disable), resumable with `tmux`. Decision only; nothing implemented.
+
 - Documentation split for publication: Vision, Requirements, product name, plan, memory and the agent instructions (`AGENTS.md`, `CLAUDE.md`) moved to the private `zorvinkel-workspace` repository, which contains this repository as the subfolder `zorvinkel/`. `docs/` keeps architecture (with ADRs), Clean Code guidelines, logo and validation, now translated to English like all other Markdown files in the repository (`packaging/BUILD.md`, `packaging/Services.md`, `THIRD-PARTY-NOTICES.md`). ADRs still cite requirement identifiers (`FR-…`, `AC-…`) from the private Requirements.
 
 - GUI: English and German. The language follows the operating system (English if it is neither) and can be switched in the tab bar; the choice is saved in the client data directory (`language`) and wins over the system language at the next start (the simulation saves nothing). All texts live in `gui/i18n.rs` (ADR-029); device state holds identifiers instead of rendered strings, so a switch applies at once. Uptime, sizes and decimals follow the language. Device names, service names/groups and Wi-Fi names are shown as the device reports them. New dependency `sys-locale`; `THIRD-PARTY-LICENSES.md` regenerated with `packaging/licenses.sh`. Verified by `fmt`, `clippy` and the client tests (45, including both languages and the saved choice); not looked at on screen, longer English or German texts may need layout tweaks.

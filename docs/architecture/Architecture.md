@@ -207,9 +207,11 @@ Keys and configuration are stored with restrictive file permissions, atomic chan
 
 ## 9. Later extensions
 
-Terminal and file transfer get their own use cases and adapters behind the existing authorisation. They are offered only over a confirmed IP channel; no emergency terminal is promised for BLE.
+Terminal and file transfer get their own use cases and adapters behind the existing authorisation. File transfer is offered only over a confirmed IP channel.
 
-SSH/SFTP are to be examined first. Registered Zorvinkel identities must be mapped to explicitly permitted operating-system accounts and verified SSH peers. Registration does not mean blanket shell or root access. Shell rights and file paths are limited on the server side; streams get flow control, abort and defined release of resources.
+The terminal is an SSH session run by the client (ADR-030). Over IP it connects to `sshd` directly; over BLE the device service forwards a byte stream of the encrypted channel to the local `sshd`. The BLE path is on by default and can be disabled on the device. Authentication stays with the operating system (password or a key deposited once for a specific user); registration alone grants no shell or root access. After login the client attaches to a `tmux` session, so a reconnect after an interruption or a change of transport reaches the same session. Registered Zorvinkel identities must additionally be mapped to explicitly permitted operating-system accounts and verified SSH peers. Streams get flow control, abort and defined release of resources.
+
+For file transfer SSH/SFTP are to be examined first; file paths are limited on the server side.
 
 A role model and additional transport paths need no changes to the network setup rules. This draft does not define a new development roadmap.
 
