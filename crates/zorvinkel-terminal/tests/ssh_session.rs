@@ -23,6 +23,10 @@ struct Seen {
     pty: Option<(String, u32, u32)>,
     command: Option<String>,
     window: Option<(u32, u32)>,
+    /// Login methods in the order they succeeded.
+    logins: Vec<&'static str>,
+    /// Commands run without a terminal (session key deposit and removal).
+    maintenance: Vec<String>,
 }
 impl server::Server for FakeDevice {
     type Handler = Self;
@@ -35,10 +39,19 @@ impl server::Handler for FakeDevice {
 
     async fn auth_password(&mut self, _user: &str, password: &str) -> Result<Auth, Self::Error> {
         Ok(if password == PASSWORD {
+            self.seen.lock().unwrap().logins.push("password");
             Auth::Accept
         } else {
             Auth::reject()
         })
+    }
+    async fn auth_publickey(
+        &mut self,
+        _user: &str,
+        _key: server::VerifiedPublicKey<'_>,
+    ) -> Result<Auth, Self::Error> {
+        self.seen.lock().unwrap().logins.push("key");
+        Ok(Auth::Accept)
     }
     async fn channel_open_session(
         &mut self,
@@ -69,8 +82,14 @@ impl server::Handler for FakeDevice {
         command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.seen.lock().unwrap().command = Some(String::from_utf8_lossy(command).into_owned());
+        let command = String::from_utf8_lossy(command).into_owned();
         session.channel_success(channel)?;
+        if command.starts_with("umask") || command.starts_with("sed") {
+            self.seen.lock().unwrap().maintenance.push(command);
+            session.exit_status_request(channel, 0)?;
+            return session.close(channel);
+        }
+        self.seen.lock().unwrap().command = Some(command);
         session.data(channel, &b"ready\r\n"[..])
     }
     async fn window_change_request(
@@ -127,7 +146,7 @@ fn connector(address: &str, password: &str, trusted: &str) -> SshConnector {
     let trusted = trusted.to_owned();
     SshConnector::new(
         address,
-        Credentials::new("pi", password.to_owned()).unwrap(),
+        Credentials::password("pi", password.to_owned()).unwrap(),
         Arc::new(move |fingerprint: &str| fingerprint == trusted),
     )
 }
@@ -234,4 +253,97 @@ async fn closing_locally_ends_the_session() {
             None => panic!("ended without a reason"),
         }
     }
+}
+
+#[tokio::test]
+async fn logs_in_with_a_private_key() {
+    use russh::keys::ssh_key::LineEnding;
+    let (address, _, fingerprint) = start_device().await;
+    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let text = key.to_openssh(LineEnding::LF).unwrap();
+    let credentials = Credentials::private_key("pi", &text, None).unwrap();
+    let mut terminal = ResumableTerminal::start(
+        SshConnector::new(
+            address,
+            credentials,
+            Arc::new(move |presented: &str| presented == fingerprint),
+        ),
+        size(),
+        RetryPolicy::default(),
+    );
+    status(&mut terminal).await;
+    assert!(matches!(
+        status(&mut terminal).await,
+        ConnectionStatus::Connected
+    ));
+}
+
+/// Against a real device: `ZORVINKEL_TEST_SSH_ADDRESS` (host:port), `ZORVINKEL_TEST_SSH_USER`
+/// and `ZORVINKEL_TEST_SSH_KEY_FILE` (unencrypted private key). Run with `--ignored --nocapture`.
+/// Detaches from `tmux` at once; without `tmux` the remote command ends with status 127.
+#[tokio::test]
+#[ignore = "needs a real device"]
+async fn real_device_session() {
+    let variable = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} not set"));
+    let key_text = std::fs::read_to_string(variable("ZORVINKEL_TEST_SSH_KEY_FILE")).unwrap();
+    let credentials =
+        Credentials::private_key(&variable("ZORVINKEL_TEST_SSH_USER"), &key_text, None).unwrap();
+    let connector = SshConnector::new(
+        variable("ZORVINKEL_TEST_SSH_ADDRESS"),
+        credentials,
+        Arc::new(|fingerprint: &str| {
+            println!("host key {fingerprint}");
+            true
+        }),
+    );
+    let mut terminal = ResumableTerminal::start(connector, size(), RetryPolicy::default());
+    status(&mut terminal).await;
+    assert!(matches!(
+        status(&mut terminal).await,
+        ConnectionStatus::Connected
+    ));
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Fails when the remote command already ended (no `tmux` on the device).
+    let _ = terminal.input(b"\x02d".to_vec()).await;
+    let mut screen = zorvinkel_terminal::Screen::new(size());
+    loop {
+        match terminal.next_event().await {
+            Some(ResumableEvent::Output(bytes)) => screen.process(&bytes),
+            Some(ResumableEvent::Status(ConnectionStatus::Finished(code))) => {
+                println!(
+                    "finished with status {code}\nscreen:\n{}",
+                    screen.view().contents()
+                );
+                break;
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn password_is_replaced_by_a_session_key_and_the_key_is_removed_again() {
+    use zorvinkel_terminal::Connector;
+    let (address, device, fingerprint) = start_device().await;
+    let mut connector = connector(&address, PASSWORD, &fingerprint);
+
+    let first = connector.connect(size()).await.unwrap();
+    first.close().await;
+    let mut second = connector.connect(size()).await.unwrap();
+    second.close().await;
+    while second.next_event().await.is_some() {}
+    connector.release().await;
+
+    let seen = device.seen.lock().unwrap();
+    assert_eq!(seen.logins[..2], ["password", "key"], "password only once");
+    assert!(seen.logins[2..].iter().all(|login| *login == "key"));
+    let [deposit, removal] = &seen.maintenance[..] else {
+        panic!(
+            "expected one deposit and one removal, got {:?}",
+            seen.maintenance
+        );
+    };
+    assert!(deposit.contains("restrict,pty ssh-ed25519 "));
+    let blob = deposit.split_whitespace().rev().nth(3).unwrap();
+    assert!(removal.contains(blob), "removes the deposited key");
 }

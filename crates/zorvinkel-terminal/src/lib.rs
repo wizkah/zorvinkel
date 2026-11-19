@@ -5,6 +5,7 @@
 //! interruption reaches the same programs. This crate holds no GUI code; the terminal widget
 //! reads the screen state from [`Screen`].
 mod credentials;
+mod deposit;
 mod resume;
 mod screen;
 mod session;

@@ -1,8 +1,8 @@
-use crate::{Connector, Credentials, TerminalSize};
+use crate::{Connector, Credentials, TerminalSize, credentials::Secret, deposit::SessionKey};
 use russh::{
     ChannelMsg, Disconnect,
     client::{self, Handle},
-    keys::{HashAlg, PublicKeyOrCertificate},
+    keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate},
 };
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 use tokio::{net::lookup_host, sync::mpsc, time::timeout};
@@ -11,6 +11,8 @@ use tokio::{net::lookup_host, sync::mpsc, time::timeout};
 pub(crate) const REMOTE_COMMAND: &str = "tmux new-session -A -s zorvinkel";
 const TERMINAL_TYPE: &str = "xterm-256color";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(8);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 const KEEPALIVE_MAX_MISSED: usize = 3;
 const QUEUE_LENGTH: usize = 64;
@@ -109,11 +111,14 @@ impl TerminalSession {
     }
 }
 
-/// Connects to the device's `sshd` with a password (ADR-030).
+/// Connects to the device's `sshd` (ADR-030). A password is used once to deposit an ephemeral
+/// session key (ADR-032); reconnects and the final cleanup use that key.
 pub struct SshConnector {
     address: String,
     credentials: Credentials,
     verifier: Arc<dyn HostKeyVerifier>,
+    /// Set once a session key has been deposited on the device and not yet removed.
+    deposited: Option<SessionKey>,
 }
 impl SshConnector {
     /// `address` is `host:port`.
@@ -126,10 +131,17 @@ impl SshConnector {
             address: address.into(),
             credentials,
             verifier,
+            deposited: None,
         }
     }
-    async fn establish(&self, size: TerminalSize) -> Result<TerminalSession, ConnectError> {
+    async fn establish(&mut self, size: TerminalSize) -> Result<TerminalSession, ConnectError> {
         let handle = self.authenticated_handle().await?;
+        if self.credentials.is_password()
+            && let Err(error) = self.replace_password_by_session_key(&handle).await
+        {
+            disconnect(&handle).await;
+            return Err(error);
+        }
         let channel = match open_terminal(&handle, size).await {
             Ok(channel) => channel,
             Err(error) => {
@@ -141,6 +153,34 @@ impl SshConnector {
         let (events_sender, events) = mpsc::channel(QUEUE_LENGTH);
         tokio::spawn(pump(handle, channel, commands, events_sender));
         Ok(TerminalSession::from_channels(command_sender, events))
+    }
+    /// Afterwards the password is dropped; if depositing fails it stays so the caller can decide.
+    async fn replace_password_by_session_key(
+        &mut self,
+        handle: &Handle<TrustHandler>,
+    ) -> Result<(), ConnectError> {
+        let refused = || ConnectError::Refused("could not deposit a session key".into());
+        let key = SessionKey::generate().ok_or_else(refused)?;
+        match run_command(handle, key.deposit_command()).await? {
+            0 => {}
+            _ => return Err(refused()),
+        }
+        self.credentials = self.credentials.session_key(key.private.clone());
+        self.deposited = Some(key);
+        Ok(())
+    }
+    async fn remove_session_key(&mut self) {
+        let Some(key) = self.deposited.take() else {
+            return;
+        };
+        let cleanup = async {
+            let handle = self.authenticated_handle().await.ok()?;
+            let removed = run_command(&handle, &key.removal_command()).await;
+            disconnect(&handle).await;
+            removed.ok()
+        };
+        // Best effort: a leftover public key is harmless, its private half is gone with us.
+        let _ = timeout(CLEANUP_TIMEOUT, cleanup).await;
     }
     async fn authenticated_handle(&self) -> Result<Handle<TrustHandler>, ConnectError> {
         let address = lookup_host(&self.address)
@@ -167,10 +207,7 @@ impl SshConnector {
                 return Err(ConnectError::Network(error.to_string()));
             }
         };
-        // `russh` keeps its own copy of the password for the length of the exchange.
-        let outcome = handle
-            .authenticate_password(self.credentials.user(), self.credentials.password())
-            .await;
+        let outcome = self.authenticate(&mut handle).await;
         match outcome {
             Ok(result) if result.success() => Ok(handle),
             Ok(_) => {
@@ -181,12 +218,35 @@ impl SshConnector {
         }
     }
 }
+impl SshConnector {
+    async fn authenticate(
+        &self,
+        handle: &mut Handle<TrustHandler>,
+    ) -> Result<client::AuthResult, russh::Error> {
+        let user = self.credentials.user();
+        match self.credentials.secret() {
+            // `russh` keeps its own copy of the password for the length of the exchange.
+            Secret::Password(password) => {
+                handle.authenticate_password(user, password.as_str()).await
+            }
+            Secret::Key(key) => {
+                let hash = handle.best_supported_rsa_hash().await?.flatten();
+                handle
+                    .authenticate_publickey(user, PrivateKeyWithHashAlg::new(key.clone(), hash))
+                    .await
+            }
+        }
+    }
+}
 impl Connector for SshConnector {
     fn connect(
         &mut self,
         size: TerminalSize,
     ) -> impl Future<Output = Result<TerminalSession, ConnectError>> + Send {
         self.establish(size)
+    }
+    fn release(&mut self) -> impl Future<Output = ()> + Send {
+        self.remove_session_key()
     }
 }
 
@@ -293,4 +353,25 @@ async fn pump(
     };
     disconnect(&handle).await;
     let _ = events.send(TerminalEvent::Ended(reason)).await;
+}
+
+/// Runs a command without a terminal and returns its exit status.
+async fn run_command(handle: &Handle<TrustHandler>, command: &str) -> Result<u32, ConnectError> {
+    let refused = |error: russh::Error| ConnectError::Refused(error.to_string());
+    let exchange = async {
+        let mut channel = handle.channel_open_session().await.map_err(refused)?;
+        channel.exec(true, command).await.map_err(refused)?;
+        let mut status = None;
+        while let Some(message) = channel.wait().await {
+            match message {
+                ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        status.ok_or_else(|| ConnectError::Refused("no exit status".into()))
+    };
+    timeout(COMMAND_TIMEOUT, exchange)
+        .await
+        .map_err(|_| ConnectError::Network("command timed out".into()))?
 }

@@ -55,6 +55,7 @@ A Cargo workspace with the following boundaries is sufficient:
 | `zorvinkel-application` | Separate client and device flows and their port traits; depends on `zorvinkel-core` |
 | `zorvinkel-protocol` | Versioned messages and encoding; no system access |
 | `zorvinkel-adapters` | Platform modules, transport, security, storage and UI integration |
+| `zorvinkel-terminal` | Interactive terminal as an SSH client session with `tmux` reattach, reconnect and terminal emulation (ADR-030); no GUI and no device code |
 | `zorvinkel-client` | Graphical entry point and wiring |
 | `zorvinkeld` | Linux service entry point and wiring |
 | `zorvinkel-admin` | Local administrative approval and recovery |

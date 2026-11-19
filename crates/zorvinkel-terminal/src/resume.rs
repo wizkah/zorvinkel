@@ -13,6 +13,10 @@ pub trait Connector: Send + 'static {
         &mut self,
         size: TerminalSize,
     ) -> impl Future<Output = Result<TerminalSession, ConnectError>> + Send;
+    /// Called once when the terminal ends for good, to clean up on the device (ADR-032).
+    fn release(&mut self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 }
 
 /// Waiting time before reconnection attempts: doubles from `first` up to `cap`, gives up after
@@ -112,6 +116,17 @@ enum Outcome {
 
 async fn supervise<C: Connector>(
     mut connector: C,
+    size: TerminalSize,
+    policy: RetryPolicy,
+    commands: mpsc::Receiver<Command>,
+    events: mpsc::Sender<ResumableEvent>,
+) {
+    run(&mut connector, size, policy, commands, events).await;
+    connector.release().await;
+}
+
+async fn run<C: Connector>(
+    connector: &mut C,
     mut size: TerminalSize,
     policy: RetryPolicy,
     mut commands: mpsc::Receiver<Command>,
