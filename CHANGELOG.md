@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- ADR-031 (proposed): the terminal over Bluetooth gets its own tunnel channel with derived keys, rekeying and flow control, independent of the status session's 600 s / 1024-record limits. Decision draft only; nothing implemented.
+
 - ADR-030: the interactive terminal will be a real SSH session run by the client, over IP or tunnelled through the Bluetooth channel (on by default, operator can disable), resumable with `tmux`. Decision only; nothing implemented.
 
 - Documentation split for publication: Vision, Requirements, product name, plan, memory and the agent instructions (`AGENTS.md`, `CLAUDE.md`) moved to the private `zorvinkel-workspace` repository, which contains this repository as the subfolder `zorvinkel/`. `docs/` keeps architecture (with ADRs), Clean Code guidelines, logo and validation, now translated to English like all other Markdown files in the repository (`packaging/BUILD.md`, `packaging/Services.md`, `THIRD-PARTY-NOTICES.md`). ADRs still cite requirement identifiers (`FR-…`, `AC-…`) from the private Requirements.
