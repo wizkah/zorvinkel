@@ -8,7 +8,8 @@ use std::{fmt, future::Future, sync::Arc, time::Duration};
 use tokio::{net::lookup_host, sync::mpsc, time::timeout};
 
 /// Attaches to the session `zorvinkel`, creating it when missing (ADR-030).
-pub(crate) const REMOTE_COMMAND: &str = "tmux new-session -A -s zorvinkel";
+/// Mouse mode lets the wheel scroll through the history of `tmux`, which owns the screen.
+pub(crate) const REMOTE_COMMAND: &str = r"tmux new-session -A -s zorvinkel \; set-option mouse on";
 const TERMINAL_TYPE: &str = "xterm-256color";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);

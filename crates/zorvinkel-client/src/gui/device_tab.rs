@@ -208,11 +208,12 @@ impl Session {
                     ui.label(RichText::new(lang.t(function_label(function))).color(color));
                 });
                 if availability == Availability::NotOffered {
-                    ui.label(
-                        RichText::new(lang.t(Text::NotOfferedByDevice))
-                            .small()
-                            .color(theme::MUTED),
-                    );
+                    let hint = if function == Function::Terminal {
+                        Text::NoAddressYet
+                    } else {
+                        Text::NotOfferedByDevice
+                    };
+                    ui.label(RichText::new(lang.t(hint)).small().color(theme::MUTED));
                 }
             }
         }
@@ -236,6 +237,7 @@ fn function_label(function: Function) -> Text {
         Function::Services => Text::FunctionServices,
         Function::ServiceActions => Text::FunctionServiceActions,
         Function::Power => Text::FunctionPower,
+        Function::Terminal => Text::FunctionTerminal,
     }
 }
 fn availability_style(availability: Availability) -> (&'static str, egui::Color32) {

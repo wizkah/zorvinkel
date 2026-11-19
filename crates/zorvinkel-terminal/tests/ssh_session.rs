@@ -202,7 +202,7 @@ async fn attaches_to_tmux_and_relays_a_session() {
     assert_eq!(seen.pty, Some(("xterm-256color".to_owned(), 100, 30)));
     assert_eq!(
         seen.command.as_deref(),
-        Some("tmux new-session -A -s zorvinkel")
+        Some(r"tmux new-session -A -s zorvinkel \; set-option mouse on")
     );
     assert_eq!(seen.window, Some((120, 40)));
 }

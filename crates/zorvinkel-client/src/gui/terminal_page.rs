@@ -1,4 +1,5 @@
 //! The terminal page: login, host key question and the embedded terminal (ADR-030, ADR-032).
+use super::terminal_mouse::{self, MouseEvent, Selection};
 use super::{
     host_keys::{HostKeyStore, Trust},
     i18n::{Language, Text},
@@ -12,7 +13,7 @@ use std::{
 };
 use tokio::{runtime::Runtime, time::timeout};
 use zeroize::Zeroizing;
-use zorvinkel_application::system::NetworkAddress;
+use zorvinkel_terminal::vt100::MouseProtocolMode;
 use zorvinkel_terminal::{
     ConnectError, ConnectionStatus, Credentials, ResumableEvent, ResumableTerminal, RetryPolicy,
     Screen, SshConnector, TerminalSize,
@@ -25,21 +26,6 @@ const MIN_HEIGHT: f32 = 320.0;
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
 /// Exit status of a shell that could not find its command.
 const COMMAND_NOT_FOUND: u32 = 127;
-
-/// The address the client should use for SSH: a routable IPv4 address if there is one.
-pub fn pick_address(addresses: &[NetworkAddress]) -> Option<IpAddr> {
-    let usable = |address: &&NetworkAddress| match address.address {
-        IpAddr::V4(ip) => !ip.is_loopback() && !ip.is_link_local(),
-        // A link-local IPv6 address needs a scope that the device cannot tell us.
-        IpAddr::V6(ip) => !ip.is_loopback() && (ip.segments()[0] & 0xffc0) != 0xfe80,
-    };
-    let mut candidates = addresses.iter().filter(usable);
-    let first_v4 = addresses
-        .iter()
-        .filter(usable)
-        .find(|address| address.address.is_ipv4());
-    first_v4.or_else(|| candidates.next()).map(|a| a.address)
-}
 
 enum Link {
     Connecting,
@@ -61,6 +47,11 @@ struct Running {
     /// Kept until the first successful login, for the host key question only (ADR-032).
     credentials: Option<Credentials>,
     address: IpAddr,
+    selection: Option<Selection>,
+    /// Cell of the last drag report, so a program is told only about changes.
+    dragged_over: Option<(u16, u16)>,
+    /// Part of a wheel step that did not fill a whole line yet.
+    wheel_rest: f32,
 }
 impl Drop for Running {
     /// Gives the cleanup on the device a moment: the session key is removed once the terminal
@@ -92,7 +83,10 @@ enum Stage {
 pub struct TerminalPanel {
     stage: Stage,
     user: String,
+    /// Doubles as the passphrase when a key file is given.
     password: Zeroizing<String>,
+    /// Path of a private key file; empty means password login.
+    key_file: String,
     notice: Option<Text>,
 }
 impl Default for TerminalPanel {
@@ -101,6 +95,7 @@ impl Default for TerminalPanel {
             stage: Stage::Login,
             user: String::new(),
             password: Zeroizing::new(String::new()),
+            key_file: String::new(),
             notice: None,
         }
     }
@@ -145,10 +140,9 @@ impl TerminalPanel {
         ui: &mut egui::Ui,
         lang: Language,
         device: &str,
-        addresses: &[NetworkAddress],
+        address: Option<IpAddr>,
         store: &mut HostKeyStore,
     ) {
-        let address = pick_address(addresses);
         match &self.stage {
             Stage::Login => self.show_login(ui, lang, device, address, store),
             Stage::HostKey(_) => self.show_host_key(ui, lang, device, store),
@@ -185,17 +179,36 @@ impl TerminalPanel {
                 ui.label(lang.t(Text::TerminalPassword));
                 ui.add(egui::TextEdit::singleline(&mut *self.password).password(true));
                 ui.end_row();
+                ui.label(lang.t(Text::TerminalKeyFile));
+                ui.text_edit_singleline(&mut self.key_file)
+                    .on_hover_text(lang.t(Text::TerminalKeyFileHint));
+                ui.end_row();
             });
         ui.add_space(8.0);
         let ready = !self.user.trim().is_empty();
         let open = ui.add_enabled(ready, theme::primary_button(lang.t(Text::TerminalOpen)));
         if open.clicked() {
-            let password = std::mem::take(&mut *self.password);
-            match Credentials::password(self.user.trim(), password.to_string()) {
+            match self.credentials_from_form() {
                 Ok(credentials) => self.start(ui.ctx(), device, address, credentials, store),
-                Err(_) => self.notice = Some(Text::TerminalLoginFailed),
+                Err(notice) => self.notice = Some(notice),
             }
         }
+    }
+
+    /// Takes the secret out of the form: it is not kept after the click.
+    fn credentials_from_form(&mut self) -> Result<Credentials, Text> {
+        let secret = Zeroizing::new(std::mem::take(&mut *self.password));
+        let user = self.user.trim();
+        let path = self.key_file.trim();
+        if path.is_empty() {
+            return Credentials::password(user, secret.to_string())
+                .map_err(|_| Text::TerminalLoginFailed);
+        }
+        let key_text = std::fs::read_to_string(path)
+            .map(Zeroizing::new)
+            .map_err(|_| Text::TerminalKeyUnreadable)?;
+        let passphrase = (!secret.is_empty()).then_some(secret.as_str());
+        Credentials::private_key(user, &key_text, passphrase).map_err(|_| Text::TerminalKeyInvalid)
     }
 
     fn start(
@@ -249,6 +262,9 @@ impl TerminalPanel {
             presented,
             credentials: Some(credentials),
             address,
+            selection: None,
+            dragged_over: None,
+            wheel_rest: 0.0,
         }));
     }
 
@@ -420,7 +436,7 @@ impl Running {
             .size();
         let available = ui.available_size();
         let area = Vec2::new(available.x, available.y.max(MIN_HEIGHT));
-        let (rect, response) = ui.allocate_exact_size(area, Sense::click());
+        let (rect, response) = ui.allocate_exact_size(area, Sense::click_and_drag());
         let id = response.id;
         if response.clicked()
             || !ui.memory(|memory| memory.has_focus(id)) && ui.memory(|m| m.focused().is_none())
@@ -441,14 +457,144 @@ impl Running {
         self.fit_to(rect, cell);
         let focused = ui.memory(|memory| memory.has_focus(id));
         if focused {
-            let events = ui.input(|input| input.events.clone());
-            let bytes =
-                terminal_input::bytes_for_events(&events, self.screen.view().application_cursor());
-            if !bytes.is_empty() {
-                let _ = self.terminal.try_input(bytes);
+            self.send_keyboard(ui);
+        }
+        self.handle_pointer(ui, &response, rect, cell);
+        self.paint(ui, rect, cell, font, focused);
+    }
+
+    /// Copies the selection on request; otherwise sends what was typed.
+    fn send_keyboard(&mut self, ui: &egui::Ui) {
+        let events = ui.input(|input| input.events.clone());
+        let copy_shortcut = |event: &egui::Event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::C,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if modifiers.ctrl && modifiers.shift
+            )
+        };
+        let copy_requested = events
+            .iter()
+            .any(|event| matches!(event, egui::Event::Copy) || copy_shortcut(event));
+        if copy_requested {
+            // A plain Ctrl+C without a selection still reaches the program as ^C.
+            if self.copy_selection(ui.ctx()) || events.iter().any(copy_shortcut) {
+                return;
             }
         }
-        self.paint(ui, rect, cell, font, focused);
+        let bytes =
+            terminal_input::bytes_for_events(&events, self.screen.view().application_cursor());
+        if !bytes.is_empty() {
+            self.selection = None;
+            self.screen.scroll_to_present();
+            let _ = self.terminal.try_input(bytes);
+        }
+    }
+    /// `true` when there was a selection to copy.
+    fn copy_selection(&mut self, ctx: &egui::Context) -> bool {
+        let Some(selection) = self.selection.take().filter(|s| !s.is_empty()) else {
+            return false;
+        };
+        let (_, columns) = self.screen.view().size();
+        let (first_row, first_column, last_row, last_column) = selection.text_range(columns.get());
+        let text =
+            self.screen
+                .view()
+                .contents_between(first_row, first_column, last_row, last_column);
+        ctx.copy_text(text);
+        true
+    }
+
+    /// Wheel and buttons: reported to programs that ask for the mouse (`tmux` does), otherwise
+    /// they scroll the local history and select text. Shift keeps the local behaviour.
+    fn handle_pointer(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect, cell: Vec2) {
+        let (rows, columns) = self.screen.view().size();
+        // The cell under a position, kept inside the screen.
+        let cell_at = move |position: egui::Pos2| {
+            let offset = position - rect.min;
+            let column = (offset.x / cell.x)
+                .floor()
+                .clamp(0.0, f32::from(columns.get() - 1));
+            let row = (offset.y / cell.y)
+                .floor()
+                .clamp(0.0, f32::from(rows.get() - 1));
+            (row as u16, column as u16)
+        };
+        let (mode, encoding) = {
+            let view = self.screen.view();
+            (view.mouse_protocol_mode(), view.mouse_protocol_encoding())
+        };
+        let local = ui.input(|input| input.modifiers.shift) || mode == MouseProtocolMode::None;
+        let report = |terminal: &ResumableTerminal, event, (row, column)| {
+            let bytes = terminal_mouse::report(mode, encoding, event, row, column);
+            if !bytes.is_empty() {
+                let _ = terminal.try_input(bytes);
+            }
+        };
+        let hover = response.hover_pos().map(cell_at);
+        if let Some(position) = hover {
+            self.wheel_rest += ui.input(|input| input.raw_scroll_delta.y) / cell.y;
+            let lines = self.wheel_rest.trunc();
+            self.wheel_rest -= lines;
+            if lines != 0.0 {
+                if local {
+                    self.screen.scroll_back(lines as isize);
+                } else {
+                    let event = if lines > 0.0 {
+                        MouseEvent::WheelUp
+                    } else {
+                        MouseEvent::WheelDown
+                    };
+                    for _ in 0..lines.abs() as usize {
+                        report(&self.terminal, event, position);
+                    }
+                }
+            }
+        }
+        let pointer = |origin: bool| {
+            let position = if origin {
+                ui.input(|input| input.pointer.press_origin())
+            } else {
+                response.interact_pointer_pos()
+            };
+            position.map(cell_at)
+        };
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            let Some(start) = pointer(true) else { return };
+            if local {
+                self.selection = Some(Selection::start(start));
+            } else {
+                self.dragged_over = Some(start);
+                report(&self.terminal, MouseEvent::Press, start);
+            }
+        } else if response.dragged_by(egui::PointerButton::Primary) {
+            let Some(current) = pointer(false) else {
+                return;
+            };
+            if local {
+                if let Some(selection) = &mut self.selection {
+                    selection.extend_to(current);
+                }
+            } else if self.dragged_over != Some(current) {
+                self.dragged_over = Some(current);
+                report(&self.terminal, MouseEvent::Drag, current);
+            }
+        } else if response.drag_stopped_by(egui::PointerButton::Primary) {
+            if !local && let Some(current) = pointer(false) {
+                report(&self.terminal, MouseEvent::Release, current);
+            }
+            self.dragged_over = None;
+        } else if response.clicked_by(egui::PointerButton::Primary) {
+            self.selection = None;
+            if !local && let Some(current) = pointer(false) {
+                report(&self.terminal, MouseEvent::Press, current);
+                report(&self.terminal, MouseEvent::Release, current);
+            }
+        }
     }
 
     /// Makes the terminal as large as the area allows.
@@ -497,6 +643,21 @@ impl Running {
                         background,
                     );
                 }
+                if self
+                    .selection
+                    .is_some_and(|selection| selection.contains(row, column))
+                {
+                    let width = if content.is_wide() {
+                        2.0 * cell.x
+                    } else {
+                        cell.x
+                    };
+                    painter.rect_filled(
+                        Rect::from_min_size(egui::pos2(left, top), Vec2::new(width, cell.y)),
+                        0.0,
+                        Color32::from_rgba_unmultiplied(120, 160, 255, 90),
+                    );
+                }
                 if content.underline() {
                     let y = top + cell.y - 1.0;
                     painter.line_segment(
@@ -520,7 +681,7 @@ impl Running {
             }
             run.flush(&painter, top, cell, &font);
         }
-        if !screen.hide_cursor() {
+        if !screen.hide_cursor() && screen.scrollback() == 0 {
             let (row, column) = screen.cursor_position();
             let origin = rect.min + Vec2::new(f32::from(column) * cell.x, f32::from(row) * cell.y);
             let cursor = Rect::from_min_size(origin, cell);
@@ -577,7 +738,7 @@ impl super::session::Session {
         self.terminal_address().is_some()
     }
     fn terminal_address(&self) -> Option<IpAddr> {
-        pick_address(&self.snapshot.system_info.as_ref()?.addresses)
+        self.snapshot.system_info.as_ref()?.ssh_address()
     }
     pub fn terminal_page(
         &mut self,
@@ -585,14 +746,9 @@ impl super::session::Session {
         lang: Language,
         host_keys: &mut HostKeyStore,
     ) {
-        let addresses = self
-            .snapshot
-            .system_info
-            .as_ref()
-            .map(|info| info.addresses.clone())
-            .unwrap_or_default();
+        let address = self.terminal_address();
         let panel = self.terminal.get_or_insert_with(TerminalPanel::default);
-        panel.show(ui, lang, &self.handle, &addresses, host_keys);
+        panel.show(ui, lang, &self.handle, address, host_keys);
     }
 }
 
@@ -600,20 +756,13 @@ impl super::session::Session {
 mod tests {
     use super::*;
 
-    fn address(text: &str) -> NetworkAddress {
-        NetworkAddress {
-            interface: "eth0".into(),
-            address: text.parse().unwrap(),
-        }
-    }
-
-    fn render(panel: &mut TerminalPanel, addresses: &[NetworkAddress], lang: Language) {
+    fn render(panel: &mut TerminalPanel, address: Option<IpAddr>, lang: Language) {
         let context = egui::Context::default();
         let mut store = HostKeyStore::none();
         let _ = context.run(egui::RawInput::default(), |context| {
             egui::CentralPanel::default().show(context, |ui| {
                 panel.poll("pi", &store);
-                panel.show(ui, lang, "pi", addresses, &mut store);
+                panel.show(ui, lang, "pi", address, &mut store);
             });
         });
     }
@@ -622,8 +771,8 @@ mod tests {
     fn login_renders_with_and_without_an_address_in_both_languages() {
         for lang in Language::ALL {
             let mut panel = TerminalPanel::default();
-            render(&mut panel, &[], lang);
-            render(&mut panel, &[address("192.168.1.20")], lang);
+            render(&mut panel, None, lang);
+            render(&mut panel, "192.168.1.20".parse().ok(), lang);
         }
     }
     #[test]
@@ -639,7 +788,7 @@ mod tests {
                 })),
                 ..TerminalPanel::default()
             };
-            render(&mut panel, &[address("192.168.1.20")], Language::English);
+            render(&mut panel, "192.168.1.20".parse().ok(), Language::English);
         }
         for ending in [
             Ending::Finished(0),
@@ -650,30 +799,7 @@ mod tests {
                 stage: Stage::Ended(ending),
                 ..TerminalPanel::default()
             };
-            render(&mut panel, &[], Language::German);
+            render(&mut panel, None, Language::German);
         }
-    }
-
-    #[test]
-    fn prefers_a_routable_ipv4_address() {
-        let addresses = [
-            address("fe80::1"),
-            address("2001:db8::7"),
-            address("127.0.0.1"),
-            address("169.254.3.4"),
-            address("192.168.1.20"),
-        ];
-        assert_eq!(pick_address(&addresses), "192.168.1.20".parse().ok());
-    }
-    #[test]
-    fn falls_back_to_a_global_ipv6_address() {
-        let addresses = [address("fe80::1"), address("2001:db8::7")];
-        assert_eq!(pick_address(&addresses), "2001:db8::7".parse().ok());
-    }
-    #[test]
-    fn local_addresses_alone_are_no_address() {
-        let addresses = [address("127.0.0.1"), address("::1"), address("fe80::2")];
-        assert_eq!(pick_address(&addresses), None);
-        assert_eq!(pick_address(&[]), None);
     }
 }

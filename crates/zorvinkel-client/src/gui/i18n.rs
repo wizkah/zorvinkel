@@ -307,6 +307,8 @@ texts! {
     FunctionServices { en: "Show services", de: "Dienste anzeigen" },
     FunctionServiceActions { en: "Control services", de: "Dienste steuern" },
     FunctionPower { en: "Shut down or restart the device", de: "Gerät ausschalten oder neu starten" },
+    FunctionTerminal { en: "Open a terminal", de: "Terminal öffnen" },
+    NoAddressYet { en: "No network address reported yet", de: "Noch keine Netzwerkadresse gemeldet" },
     ReachabilityUnverified { en: "Not checked yet", de: "Noch nicht geprüft" },
     ReachabilityAuthenticated { en: "Reachable and confirmed", de: "Erreichbar und bestätigt" },
     ReachabilityUnreachable { en: "Not reachable", de: "Nicht erreichbar" },
@@ -483,6 +485,19 @@ texts! {
     TerminalReconnecting {
         en: "Connection lost, reconnecting (attempt {0}) …",
         de: "Verbindung unterbrochen, Wiederverbindung (Versuch {0}) …",
+    },
+    TerminalKeyFile { en: "Key file (optional)", de: "Schlüsseldatei (optional)" },
+    TerminalKeyFileHint {
+        en: "Path of a private SSH key. The password field is then the passphrase of the key; leave it empty if the key has none.",
+        de: "Pfad eines privaten SSH-Schlüssels. Das Passwortfeld ist dann die Passphrase des Schlüssels; leer lassen, wenn er keine hat.",
+    },
+    TerminalKeyUnreadable {
+        en: "The key file could not be read.",
+        de: "Die Schlüsseldatei konnte nicht gelesen werden.",
+    },
+    TerminalKeyInvalid {
+        en: "The key file is not a usable private key, or the passphrase is wrong.",
+        de: "Die Schlüsseldatei ist kein brauchbarer privater Schlüssel, oder die Passphrase ist falsch.",
     },
     TerminalLoginFailed {
         en: "Login failed. Check user and password.",

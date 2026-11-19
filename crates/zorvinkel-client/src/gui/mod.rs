@@ -10,6 +10,7 @@ mod session;
 mod system_page;
 mod terminal_colors;
 mod terminal_input;
+mod terminal_mouse;
 mod terminal_page;
 mod theme;
 #[cfg(target_os = "macos")]

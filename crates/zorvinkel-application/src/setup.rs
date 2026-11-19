@@ -39,6 +39,8 @@ pub enum Function {
     Services,
     ServiceActions,
     Power,
+    /// Interactive SSH terminal; needs an address of the device, not a device capability.
+    Terminal,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Availability {
@@ -49,7 +51,7 @@ pub enum Availability {
 impl SetupSnapshot {
     /// Every function with what the device reported over the current connection. Both
     /// transports carry all operations, so the connection path does not change the answer.
-    pub fn functions(&self) -> [(Function, Availability); 7] {
+    pub fn functions(&self) -> [(Function, Availability); 8] {
         let state = |offered: bool| {
             if offered {
                 Availability::Available
@@ -71,6 +73,14 @@ impl SetupSnapshot {
                 state(self.services_available && self.service_actions_available),
             ),
             (Function::Power, state(self.power_available)),
+            (
+                Function::Terminal,
+                state(
+                    self.system_info
+                        .as_ref()
+                        .is_some_and(|info| info.ssh_address().is_some()),
+                ),
+            ),
         ]
     }
 }

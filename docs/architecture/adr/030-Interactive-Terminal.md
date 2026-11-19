@@ -15,6 +15,7 @@ Experts should open an interactive terminal on the device from the client, witho
 
 ## Consequences
 
+- The client starts `tmux` with `set-option mouse on` for the session `zorvinkel`, so the wheel and mouse reach `tmux` (scrolling its history, selecting panes). `tmux` owns the screen, so the terminal widget has no history of its own while `tmux` runs; Shift bypasses mouse reporting for local text selection.
 - Operating-system accounts and their permissions limit what a terminal user can do; there is no Zorvinkel-specific shell restriction. Protected-unit rules (ADR-022) do not apply inside a shell.
 - Keystrokes typed during an interruption can be lost. A reboot of the device ends the `tmux` session. A session survives a transport change only because the client reconnects; it is not one continuous connection.
 - The Bluetooth tunnel needs fragmentation for small MTUs, flow control, abort and defined release of resources. Throughput and latency over Bluetooth are limited.

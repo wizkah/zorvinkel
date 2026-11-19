@@ -24,6 +24,10 @@ pub fn bytes_for_events(events: &[Event], application_cursor: bool) -> Vec<u8> {
 
 fn key_bytes(key: Key, modifiers: Modifiers, application_cursor: bool) -> Vec<u8> {
     if modifiers.ctrl && !modifiers.alt {
+        // Ctrl+Shift combinations belong to the terminal itself (copy), not to the program.
+        if modifiers.shift {
+            return Vec::new();
+        }
         return control_byte(key).map(|byte| vec![byte]).unwrap_or_default();
     }
     let cursor = |letter: u8| {

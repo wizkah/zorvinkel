@@ -46,6 +46,15 @@ impl Screen {
     pub fn view(&self) -> &vt100::Screen {
         self.parser.screen()
     }
+    /// Moves the view into the history (positive) or back towards the present (negative).
+    pub fn scroll_back(&mut self, lines: isize) {
+        let screen = self.parser.screen_mut();
+        let target = screen.scrollback().saturating_add_signed(lines);
+        screen.set_scrollback(target);
+    }
+    pub fn scroll_to_present(&mut self) {
+        self.parser.screen_mut().set_scrollback(0);
+    }
 }
 
 #[cfg(test)]
@@ -76,6 +85,18 @@ mod tests {
         assert_eq!(screen.view().contents(), "");
         assert_eq!(screen.view().size().0.get(), 2);
         assert_eq!(screen.view().size().1.get(), 10);
+    }
+    #[test]
+    fn scrolling_back_shows_history_and_returns_to_the_present() {
+        let mut screen = Screen::new(size(10, 2));
+        screen.process(b"one\r\ntwo\r\nthree\r\nfour");
+        assert_eq!(screen.view().contents(), "three\nfour");
+        screen.scroll_back(2);
+        assert_eq!(screen.view().contents(), "one\ntwo");
+        screen.scroll_back(-1);
+        assert_eq!(screen.view().contents(), "two\nthree");
+        screen.scroll_to_present();
+        assert_eq!(screen.view().contents(), "three\nfour");
     }
     #[test]
     fn resize_changes_the_grid() {
