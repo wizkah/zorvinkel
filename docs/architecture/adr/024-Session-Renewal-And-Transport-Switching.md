@@ -1,6 +1,6 @@
 # ADR-024 – Session renewal, transport switching and correlation proof
 
-**Status:** Accepted. Supplements ADR-023 (sessions, connection choice); its statements on session end and on the BLE-to-IP switch without a correlation proof are thereby replaced.
+**Status:** Accepted; the per-device renewal switch and the "Renew now" hint are replaced by ADR-035. Supplements ADR-023 (sessions, connection choice); its statements on session end and on the BLE-to-IP switch without a correlation proof are thereby replaced.
 
 ## Context
 
