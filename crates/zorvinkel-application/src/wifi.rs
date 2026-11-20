@@ -30,6 +30,8 @@ pub enum RestartChange {
     LastAccepted,
     /// The configuration that is active now becomes the default.
     CurrentAsDefault,
+    /// Switch at once back to the configuration that applies after a restart.
+    Revert,
 }
 pub trait WifiSetupControl {
     fn scan(&mut self, actor: &ClientKey, id: u64) -> Result<(), WifiError>;
@@ -91,6 +93,11 @@ pub trait WifiSetupControl {
     }
     fn restart_state(&mut self, _actor: &ClientKey) -> Result<RestartState, WifiError> {
         Err(WifiError::Unsupported)
+    }
+    /// The configuration active now differs from the one that applies after a restart; `false`
+    /// when it is the same or the adapter cannot tell.
+    fn restart_differs(&mut self, _actor: &ClientKey) -> bool {
+        false
     }
     /// Starts changing the option; progress is polled like other tasks. A default needs an
     /// active Wi-Fi connection or access point.

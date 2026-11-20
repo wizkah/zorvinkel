@@ -64,9 +64,13 @@ fn main() -> ExitCode {
     if arguments == ["--ble-probe"] {
         return run_ble_probe();
     }
+    #[cfg(all(feature = "ble-server", target_os = "linux"))]
+    if arguments == ["--ble-bench"] {
+        return run_ble_bench();
+    }
     if arguments != ["--simulate"] {
         eprintln!(
-            "Usage: zorvinkeld --simulate | --ble-probe | --initialize directory | --check-storage directory | --serve directory admin-socket interface (native service requires Linux, security and ble-server features)"
+            "Usage: zorvinkeld --simulate | --ble-probe | --ble-bench | --initialize directory | --check-storage directory | --serve directory admin-socket interface (native service requires Linux, security and ble-server features)"
         );
         return ExitCode::FAILURE;
     }
@@ -96,6 +100,26 @@ fn run_ble_probe() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("BLE probe server failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Radio measurement service for the terminal tunnel limits (ADR-031); carries no application data.
+#[cfg(all(feature = "ble-server", target_os = "linux"))]
+fn run_ble_bench() -> ExitCode {
+    let result = (|| {
+        let runtime = tokio::runtime::Runtime::new()?;
+        runtime.block_on(zorvinkel_adapters::ble::bench::serve_bench(async {
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                eprintln!("Shutdown signal failed: {error}");
+            }
+        }))
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("BLE bench server failed: {error}");
             ExitCode::FAILURE
         }
     }

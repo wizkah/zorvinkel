@@ -4,7 +4,7 @@ use super::{
     session::{Session, WifiMode},
     theme,
 };
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32};
 use zorvinkel_adapters::simulation::setup::DEMO_WIFI_PASSWORD;
 use zorvinkel_application::{power::PowerAction, setup::*};
 
@@ -86,11 +86,6 @@ impl Session {
                     ssid: self.ssid.clone(),
                 });
             }
-            if self.action_button(ui, egui::Button::new(lang.t(Text::UseCachedPassword))) {
-                self.submit(SetupRequest::ReadCachedCredentials {
-                    ssid: self.ssid.clone(),
-                });
-            }
         });
         if self.simulation {
             ui.small(lang.format(Text::DemoPassword, &[&DEMO_WIFI_PASSWORD]));
@@ -107,95 +102,34 @@ impl Session {
             });
         }
     }
-    /// The one place for what the device does after a restart: back to its original settings,
-    /// or keep the current one, either following later changes or fixed as the default.
+    /// Revert / Persist: offered while the device runs a configuration that is not the one it
+    /// would come back with after a restart. Revert switches back to the persisted one at once;
+    /// Persist makes the running one the persisted one.
     fn restart_choice(&mut self, ui: &mut egui::Ui, lang: Language) {
-        use zorvinkel_core::network::RestartPolicy;
-        let persistence = self.snapshot.wifi_persistence;
-        let default_offered = self.snapshot.restart_policy.is_some();
-        if persistence.is_none() && !default_offered {
+        if !self.snapshot.restart_differs {
             return;
         }
-        let fixed = matches!(
-            self.snapshot.restart_policy,
-            Some(RestartPolicy::DefaultProfile(_))
-        );
-        let following = !fixed && persistence == Some(true);
-        let has_network = !matches!(
-            self.snapshot.status.as_ref().map(|status| &status.network),
-            None | Some(zorvinkel_core::NetworkStatus::Disconnected)
-        );
         ui.add_space(8.0);
-        ui.separator();
-        ui.label(RichText::new(lang.t(Text::AfterRestart)).strong());
-        let kept = fixed || following;
-        let mut keep = kept;
-        let mut follow = following || (!fixed && persistence.is_none());
-        ui.add_enabled_ui(self.active_action.is_none(), |ui| {
+        let mut request = None;
+        ui.horizontal(|ui| {
+            let idle = self.active_action.is_none();
             if ui
-                .radio(
-                    !kept,
-                    if persistence.is_some() {
-                        lang.t(Text::RestartUseOriginal)
-                    } else {
-                        lang.t(Text::RestartUseLastAccepted)
-                    },
-                )
+                .add_enabled(idle, egui::Button::new(lang.t(Text::RestartRevert)))
+                .on_hover_text(lang.t(Text::RestartHintOriginal))
                 .clicked()
             {
-                keep = false;
+                request = Some(SetupRequest::RestartRevert);
             }
-            if ui.radio(kept, lang.t(Text::RestartKeepCurrent)).clicked() {
-                keep = true;
-            }
-            // Following later changes needs the keep switch; a fixed default needs a network.
-            if kept && persistence.is_some() && default_offered {
-                ui.add_enabled_ui(has_network || fixed, |ui| {
-                    ui.checkbox(&mut follow, lang.t(Text::RestartFollowChanges));
-                });
+            if ui
+                .add_enabled(idle, theme::primary_button(lang.t(Text::RestartPersist)))
+                .on_hover_text(lang.t(Text::RestartHintKeep))
+                .clicked()
+            {
+                request = Some(SetupRequest::RestartCurrentAsDefault);
             }
         });
-        ui.small(lang.t(if !kept {
-            Text::RestartHintOriginal
-        } else if fixed {
-            Text::RestartHintFixed
-        } else {
-            Text::RestartHintKeep
-        }));
-        if fixed
-            && has_network
-            && self.action_button(ui, egui::Button::new(lang.t(Text::RestartSetAsDefault)))
-        {
-            self.submit(SetupRequest::RestartCurrentAsDefault);
-        }
-        let request = if !keep && kept {
-            // Leaving "keep" also ends a fixed default.
-            Some(if persistence.is_some() {
-                SetupRequest::SetWifiPersistence(false)
-            } else {
-                SetupRequest::RestartLastAccepted
-            })
-        } else if keep && !kept {
-            // Without the choice to follow, the current setting is simply the default.
-            Some(if persistence.is_some() {
-                SetupRequest::SetWifiPersistence(true)
-            } else {
-                SetupRequest::RestartCurrentAsDefault
-            })
-        } else if keep && follow != (following || (!fixed && persistence.is_none())) {
-            Some(if follow {
-                SetupRequest::SetWifiPersistence(true)
-            } else {
-                SetupRequest::RestartCurrentAsDefault
-            })
-        } else {
-            None
-        };
         if let Some(request) = request {
             self.submit(request);
-        }
-        if self.simulation {
-            ui.small(lang.t(Text::RestartSimulationHint));
         }
     }
     fn access_point(&mut self, ui: &mut egui::Ui, lang: Language) {

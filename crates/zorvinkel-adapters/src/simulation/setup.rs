@@ -22,6 +22,8 @@ pub struct SimulatedSetup {
     discovered: bool,
     scanned: bool,
     wifi_persistence: bool,
+    /// What the simulated device applies after a restart; a change is volatile until it matches.
+    persisted: NetworkConfiguration,
     /// What the simulated device stored; `None` makes the setup propose defaults.
     access_point: Option<AccessPointSettings>,
     next_operation: u64,
@@ -32,6 +34,8 @@ impl Default for SimulatedSetup {
         Self::with_devices(vec![DiscoveredDevice {
             handle: "simulation:device-1".into(),
             display_name: "Photo booth · Demo".into(),
+            via_ble: true,
+            via_ip: true,
         }])
     }
 }
@@ -43,6 +47,9 @@ impl SimulatedSetup {
                 .map(|number| DiscoveredDevice {
                     handle: format!("simulation:device-{number}"),
                     display_name: format!("Photo booth {number:02}"),
+                    // Varied so that all tile states show up in the demo.
+                    via_ble: number % 3 != 0,
+                    via_ip: number % 2 == 0 || number % 3 == 0,
                 })
                 .collect(),
         )
@@ -66,6 +73,7 @@ impl SimulatedSetup {
             discovered: false,
             scanned: false,
             wifi_persistence: false,
+            persisted: NetworkConfiguration::Disconnected,
             access_point: None,
             next_operation: 1,
             services: simulated_services(),
@@ -116,6 +124,7 @@ impl SimulatedSetup {
                 return Ok(());
             }
             SetupRequest::Refresh => return Ok(()),
+            SetupRequest::OpenTunnel => return Err(SetupError::Unsupported),
             _ => (),
         }
         if !self.connected {
@@ -157,12 +166,17 @@ impl SimulatedSetup {
                 if self.network.configuration == NetworkConfiguration::Disconnected {
                     return Err(SetupError::NoActiveNetwork);
                 }
+                self.persisted = self.network.configuration.clone();
                 set_restart_policy(
                     &mut self.store,
                     &Self::actor(),
                     RestartPolicy::DefaultProfile(self.network.configuration.clone()),
                 )
                 .map_err(|_| SetupError::Unavailable)
+            }
+            SetupRequest::RestartRevert => {
+                self.network.configuration = self.persisted.clone();
+                Ok(())
             }
             SetupRequest::SetWifiPersistence(enabled) => {
                 self.wifi_persistence = enabled;
@@ -189,8 +203,7 @@ impl SimulatedSetup {
                 self.scanned = false;
                 Ok(())
             }
-            SetupRequest::ReadSavedCredentials { .. }
-            | SetupRequest::ReadCachedCredentials { .. } => Err(SetupError::CredentialsUnavailable),
+            SetupRequest::ReadSavedCredentials { .. } => Err(SetupError::CredentialsUnavailable),
             _ => unreachable!("connection commands were handled before authorization"),
         }
     }
@@ -210,6 +223,14 @@ impl SimulatedSetup {
         )
         .map_err(|_| SetupError::Unavailable)?;
         if matches!(operation.status, OperationStatus::Succeeded { .. }) {
+            // With persistence on and no fixed default, a successful change is kept.
+            let following = self.wifi_persistence
+                && self.store.read().is_ok_and(|state| {
+                    state.settings.restart_policy == RestartPolicy::LastAccepted
+                });
+            if following {
+                self.persisted = self.network.configuration.clone();
+            }
             Ok(())
         } else {
             Err(SetupError::ConnectionRejected)
@@ -250,6 +271,8 @@ impl SimulatedSetup {
             },
             wifi_available: true,
             power_available: true,
+            tunnel_available: false,
+            tunnel: Default::default(),
             system_info_available: true,
             system_info: Some(zorvinkel_application::system::SystemInfo {
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -286,6 +309,7 @@ impl SimulatedSetup {
                     .settings
                     .restart_policy,
             ),
+            restart_differs: self.network.configuration != self.persisted,
             transport: None,
             session_remaining: None,
         })

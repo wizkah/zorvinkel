@@ -76,6 +76,51 @@ impl NativeSetup {
     pub fn public_key(&self) -> Vec<u8> {
         self.identity.public_key().to_vec()
     }
+    /// The next connection skips the network path and uses Bluetooth, the only carrier of a tunnel.
+    pub fn force_bluetooth(&mut self) {
+        self.force_ble = true;
+    }
+    /// Opens a terminal tunnel over the connected Bluetooth device and returns the client end of
+    /// the stream; SSH runs over it. It lives on this backend's runtime and closes when dropped.
+    pub fn open_tunnel(&mut self) -> BleResult<tokio::io::DuplexStream> {
+        let connection = self.connection.as_mut().ok_or("not connected")?;
+        self.runtime.block_on(connection.open_tunnel())
+    }
+    /// Diagnostic for the tunnel (ADR-031): opens one, reads the identification line `sshd` sends
+    /// first, answers with one and reads the start of the key exchange. Needs no SSH login.
+    pub fn probe_tunnel(&mut self) -> BleResult<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = self.open_tunnel()?;
+        self.runtime.block_on(async move {
+            let started = Instant::now();
+            let limit = Duration::from_secs(15);
+            let mut banner = Vec::new();
+            while !banner.ends_with(
+                b"
+",
+            ) && banner.len() < 255
+            {
+                let mut byte = [0];
+                timeout(limit, stream.read_exact(&mut byte)).await??;
+                banner.push(byte[0]);
+            }
+            let first = started.elapsed();
+            stream
+                .write_all(
+                    b"SSH-2.0-zorvinkel-probe
+",
+                )
+                .await?;
+            let mut exchange = vec![0; 512];
+            timeout(limit, stream.read_exact(&mut exchange)).await??;
+            Ok(format!(
+                "identification {:?} after {first:?}; {} more bytes after {:?}",
+                String::from_utf8_lossy(&banner).trim_end(),
+                exchange.len(),
+                started.elapsed()
+            ))
+        })
+    }
     fn apply(&mut self, request: SetupRequest) -> BleResult<()> {
         self.runtime.block_on(async {
             match request {
@@ -125,13 +170,18 @@ impl NativeSetup {
                             .iter_mut()
                             .find(|known| known.handle == handle)
                         {
-                            Some(known) => known.display_name = device.instance.clone(),
+                            Some(known) => {
+                                known.display_name = device.instance.clone();
+                                known.via_ip = true;
+                            }
                             None => self
                                 .snapshot
                                 .devices
                                 .push(zorvinkel_core::DiscoveredDevice {
                                     handle: handle.clone(),
                                     display_name: device.instance.clone(),
+                                    via_ble: false,
+                                    via_ip: true,
                                 }),
                         }
                         self.ip_devices.insert(handle, device);
@@ -181,6 +231,8 @@ impl NativeSetup {
                         bits & zorvinkel_protocol::wifi::CAP_WIFI_TEMPORARY != 0;
                     self.snapshot.power_available =
                         bits & zorvinkel_protocol::power::CAP_POWER != 0;
+                    self.snapshot.tunnel_available =
+                        bits & zorvinkel_protocol::tunnel::CAP_TUNNEL != 0;
                     self.snapshot.wifi_persistence = None;
                     self.snapshot.system_info_available =
                         bits & zorvinkel_protocol::system::CAP_SYSTEM_INFO != 0;
@@ -206,9 +258,9 @@ impl NativeSetup {
                             Some(read_persistence(&mut connection, None).await?);
                     }
                     self.snapshot.restart_policy = None;
+                    self.snapshot.restart_differs = false;
                     if bits & zorvinkel_protocol::restart::CAP_RESTART_POLICY != 0 {
-                        self.snapshot.restart_policy =
-                            Some(read_restart_policy(&mut connection).await?);
+                        read_restart_into(&mut connection, &mut self.snapshot).await?;
                     }
                     if let Some(advertised) = self.advertised_names.get(&handle) {
                         use zorvinkel_application::trust::DeviceTrustStore;
@@ -318,6 +370,9 @@ impl NativeSetup {
                             .await?;
                         }
                         self.snapshot.status = Some(read_status(connection).await?);
+                        if self.snapshot.restart_policy.is_some() {
+                            read_restart_into(connection, &mut self.snapshot).await?;
+                        }
                         if self.snapshot.system_info_available {
                             self.snapshot.system_info = read_system_info(connection).await?;
                         }
@@ -371,7 +426,9 @@ impl NativeSetup {
                         .await?;
                     }
                 }
-                SetupRequest::RestartLastAccepted | SetupRequest::RestartCurrentAsDefault => {
+                SetupRequest::RestartLastAccepted
+                | SetupRequest::RestartCurrentAsDefault
+                | SetupRequest::RestartRevert => {
                     if self.snapshot.restart_policy.is_none() {
                         return Err(WifiRequestFailure(SetupError::Unsupported).into());
                     }
@@ -390,6 +447,8 @@ impl NativeSetup {
                     }
                     let change = if matches!(request, SetupRequest::RestartLastAccepted) {
                         zorvinkel_protocol::restart::RestartChange::LastAccepted
+                    } else if matches!(request, SetupRequest::RestartRevert) {
+                        zorvinkel_protocol::restart::RestartChange::Revert
                     } else {
                         // A default needs something to fix; the device checks this again.
                         if matches!(
@@ -645,19 +704,20 @@ async fn prefer_ip(
 }
 impl SetupBackend for NativeSetup {
     fn handle(&mut self, request: SetupRequest) -> Result<SetupUpdate, SetupError> {
-        if let SetupRequest::ReadSavedCredentials { ssid } = &request {
-            let result = crate::credentials::SystemCredentialSource.saved_wifi_password(ssid);
-            return Ok(SetupUpdate {
-                snapshot: self.snapshot.clone(),
-                error: result.as_ref().err().copied(),
-                saved_password: result.ok(),
-            });
+        if matches!(request, SetupRequest::OpenTunnel) {
+            return Ok(self.open_tunnel_update());
         }
-        if let SetupRequest::ReadCachedCredentials { ssid } = &request {
-            let result = crate::wifi_cache::system_wifi_cache()
-                .ok_or(SetupError::CredentialsUnavailable)
-                .and_then(|mut cache| cache.cached_password(ssid))
-                .and_then(|found| found.ok_or(SetupError::CredentialsUnavailable));
+        if let SetupRequest::ReadSavedCredentials { ssid } = &request {
+            // The system may not know the network; then the password Zorvinkel remembered after
+            // a successful connection is the second place to look.
+            let result = crate::credentials::SystemCredentialSource
+                .saved_wifi_password(ssid)
+                .or_else(|_| {
+                    crate::wifi_cache::system_wifi_cache()
+                        .ok_or(SetupError::CredentialsUnavailable)
+                        .and_then(|mut cache| cache.cached_password(ssid))
+                        .and_then(|found| found.ok_or(SetupError::CredentialsUnavailable))
+                });
             return Ok(SetupUpdate {
                 snapshot: self.snapshot.clone(),
                 error: result.as_ref().err().copied(),
@@ -764,6 +824,41 @@ impl SetupBackend for NativeSetup {
             error,
             saved_password: None,
         })
+    }
+}
+impl NativeSetup {
+    /// A refused or failed tunnel is reported in the update; unlike other requests it does not
+    /// end the connection, because the status session itself still works.
+    fn open_tunnel_update(&mut self) -> SetupUpdate {
+        use super::secure_client::TunnelRefused;
+        use zorvinkel_protocol::status::RemoteError;
+        let error = match self.open_tunnel() {
+            Ok(stream) => {
+                self.snapshot.tunnel.put(stream);
+                None
+            }
+            Err(error) => {
+                eprintln!("Tunnel request failed: {error}");
+                Some(
+                    match error
+                        .downcast_ref::<TunnelRefused>()
+                        .map(|refused| refused.0)
+                    {
+                        Some(RemoteError::Busy) => SetupError::Busy,
+                        Some(RemoteError::Unsupported | RemoteError::Unavailable) => {
+                            SetupError::Unsupported
+                        }
+                        _ if self.connection.is_none() => SetupError::Disconnected,
+                        _ => SetupError::Unavailable,
+                    },
+                )
+            }
+        };
+        SetupUpdate {
+            snapshot: self.snapshot.clone(),
+            error,
+            saved_password: None,
+        }
     }
 }
 impl NativeSetup {
@@ -912,8 +1007,10 @@ fn reset_device(snapshot: &mut SetupSnapshot) {
     snapshot.status = None;
     snapshot.wifi_available = false;
     snapshot.power_available = false;
+    snapshot.tunnel_available = false;
     snapshot.wifi_persistence = None;
     snapshot.restart_policy = None;
+    snapshot.restart_differs = false;
     snapshot.system_info_available = false;
     snapshot.system_info = None;
     snapshot.services_available = false;
@@ -1011,15 +1108,24 @@ async fn switch_access_point(
 
 /// The client only needs to know whether a default is set; the stored profile stays on the
 /// device, so the reference below is a placeholder for the discriminant.
+async fn read_restart_into(
+    connection: &mut StatusConnection,
+    snapshot: &mut SetupSnapshot,
+) -> BleResult<()> {
+    let (policy, differs) = read_restart_policy(connection).await?;
+    snapshot.restart_policy = Some(policy);
+    snapshot.restart_differs = differs;
+    Ok(())
+}
 async fn read_restart_policy(
     connection: &mut StatusConnection,
-) -> BleResult<zorvinkel_core::network::RestartPolicy> {
+) -> BleResult<(zorvinkel_core::network::RestartPolicy, bool)> {
     use zorvinkel_core::network::{NetworkConfiguration, ProfileId, RestartPolicy};
     use zorvinkel_protocol::restart::RestartState;
     match connection.request(Operation::RestartPolicyRead).await? {
-        ResponseBody::RestartPolicy(state) => {
+        ResponseBody::RestartPolicy(report) => {
             let reference = || ProfileId::new("device-default".into());
-            Ok(match state {
+            let policy = match report.state {
                 RestartState::LastAccepted => RestartPolicy::LastAccepted,
                 RestartState::DefaultWifi => RestartPolicy::DefaultProfile(
                     NetworkConfiguration::Wifi(reference().map_err(|_| "invalid profile")?),
@@ -1027,7 +1133,8 @@ async fn read_restart_policy(
                 RestartState::DefaultAccessPoint => RestartPolicy::DefaultProfile(
                     NetworkConfiguration::AccessPoint(reference().map_err(|_| "invalid profile")?),
                 ),
-            })
+            };
+            Ok((policy, report.differs))
         }
         ResponseBody::Error(error) => Err(WifiRequestFailure(wifi_remote_error(error)).into()),
         _ => Err("invalid restart option response".into()),
@@ -1069,8 +1176,7 @@ async fn change_restart_policy(
             }
             _ => error,
         })?;
-    snapshot.restart_policy = Some(read_restart_policy(connection).await?);
-    Ok(())
+    read_restart_into(connection, snapshot).await
 }
 
 async fn read_persistence(
@@ -1180,6 +1286,9 @@ async fn finish_wifi(
                     _ => return Err(WifiRequestFailure(SetupError::Unavailable).into()),
                 }
                 snapshot.status = Some(read_status(connection).await?);
+                if snapshot.restart_policy.is_some() {
+                    read_restart_into(connection, snapshot).await?;
+                }
                 return Ok(());
             }
             ResponseBody::Error(error) => {

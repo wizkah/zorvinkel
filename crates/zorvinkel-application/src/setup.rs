@@ -39,6 +39,8 @@ pub enum Function {
     Services,
     ServiceActions,
     Power,
+    /// Interactive SSH terminal; needs an address of the device or a tunnel over Bluetooth.
+    Terminal,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Availability {
@@ -49,7 +51,7 @@ pub enum Availability {
 impl SetupSnapshot {
     /// Every function with what the device reported over the current connection. Both
     /// transports carry all operations, so the connection path does not change the answer.
-    pub fn functions(&self) -> [(Function, Availability); 7] {
+    pub fn functions(&self) -> [(Function, Availability); 8] {
         let state = |offered: bool| {
             if offered {
                 Availability::Available
@@ -71,6 +73,15 @@ impl SetupSnapshot {
                 state(self.services_available && self.service_actions_available),
             ),
             (Function::Power, state(self.power_available)),
+            (
+                Function::Terminal,
+                state(
+                    self.system_info
+                        .as_ref()
+                        .is_some_and(|info| info.ssh_address().is_some())
+                        || (self.tunnel_available && self.transport == Some(Transport::Ble)),
+                ),
+            ),
         ]
     }
 }
@@ -84,6 +95,9 @@ pub enum Transport {
 
 pub enum SetupRequest {
     Discover,
+    /// Opens a terminal tunnel over the connected Bluetooth device; the stream arrives in
+    /// `SetupSnapshot::tunnel` (ADR-031). A refusal is reported in the update, the connection stays.
+    OpenTunnel,
     Connect(String),
     Disconnect,
     Refresh,
@@ -99,12 +113,11 @@ pub enum SetupRequest {
     UpdateAccessPoint(AccessPointSettings),
     RestartLastAccepted,
     RestartCurrentAsDefault,
-    /// Reads the password the client system has stored for this network, on explicit request.
+    /// Switches at once back to the configuration that applies after a restart.
+    RestartRevert,
+    /// Reads the password for this network on explicit request: the client system's store
+    /// first, then the one Zorvinkel remembered after a successful connection.
     ReadSavedCredentials {
-        ssid: String,
-    },
-    /// Reads the password Zorvinkel remembered after a successful connection to this network.
-    ReadCachedCredentials {
         ssid: String,
     },
     /// Keep (true) or discard (false) Wi-Fi connections made from now on after a restart.
@@ -116,6 +129,23 @@ pub enum SetupRequest {
         name: String,
         action: ServiceAction,
     },
+}
+
+/// Hands one transport stream from the backend thread to the caller. The type of the stream is
+/// the adapter's business, so it travels as `Any`; whoever opened it knows what to ask for.
+#[derive(Clone, Default)]
+pub struct TunnelHandoff(std::sync::Arc<std::sync::Mutex<Option<Box<dyn std::any::Any + Send>>>>);
+impl TunnelHandoff {
+    pub fn put<T: std::any::Any + Send>(&self, stream: T) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = Some(Box::new(stream));
+        }
+    }
+    /// The stream, once; `None` when none was left or it has another type.
+    pub fn take<T: std::any::Any + Send>(&self) -> Option<T> {
+        let boxed = self.0.lock().ok()?.take()?;
+        boxed.downcast::<T>().ok().map(|stream| *stream)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -143,8 +173,14 @@ pub struct SetupSnapshot {
     /// `access_point` is a proposal that the device has not stored yet.
     pub access_point_proposed: bool,
     pub restart_policy: Option<RestartPolicy>,
+    /// The configuration active now is not the one that applies after a restart.
+    pub restart_differs: bool,
     /// How the connected device is reached; `None` while disconnected or simulated.
     pub transport: Option<Transport>,
+    /// The device offers the terminal tunnel (capability); usable over Bluetooth only.
+    pub tunnel_available: bool,
+    /// Where a stream opened by `OpenTunnel` is left for the caller.
+    pub tunnel: TunnelHandoff,
     /// Time the secured session has left before it ends; `ZERO` once it must be renewed.
     pub session_remaining: Option<std::time::Duration>,
 }

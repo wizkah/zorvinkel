@@ -11,7 +11,7 @@
 
 - A graphical client and a device service form the system. No cloud. The device announces itself on the local network via mDNS/DNS-SD; there are no other network services.
 - BLE carries device discovery, registration, basic network status, network setup and recovery.
-- IP over Wi-Fi, Ethernet or the device's own Wi-Fi carries the same operations as BLE (ADR-023) and, later, terminal and files. Bluetooth Classic is not planned.
+- IP over Wi-Fi, Ethernet or the device's own Wi-Fi carries the same operations as BLE (ADR-023), the terminal and, later, files. Bluetooth Classic is not planned.
 - Clean Architecture determines the direction of dependencies. IOSP separates domain decisions and operations from their coordination.
 - Domain modules stay independent of radio technology, operating system, user interface and storage format. A full IODA structure is not prescribed in addition.
 
@@ -55,6 +55,7 @@ A Cargo workspace with the following boundaries is sufficient:
 | `zorvinkel-application` | Separate client and device flows and their port traits; depends on `zorvinkel-core` |
 | `zorvinkel-protocol` | Versioned messages and encoding; no system access |
 | `zorvinkel-adapters` | Platform modules, transport, security, storage and UI integration |
+| `zorvinkel-terminal` | Interactive terminal as an SSH client session with `tmux` reattach, reconnect and terminal emulation (ADR-030); no GUI and no device code |
 | `zorvinkel-client` | Graphical entry point and wiring |
 | `zorvinkeld` | Linux service entry point and wiring |
 | `zorvinkel-admin` | Local administrative approval and recovery |
@@ -125,7 +126,7 @@ The secured status flow uses the Noise and message profile defined in ADR-006. T
 - Messages after the handshake are encrypted and integrity-protected; ordering, replay protection and nonces follow the security profile. Each new connection gets fresh session keys.
 - When the transport changes, the same persistent peer identities are verified again. Neither old session keys nor plain bearer tokens are carried over.
 - An IP connection gets a new session. It does not implicitly take over running commands or streams. A running BLE-to-IP switch is additionally correlated by a one-time, time-limited proof inside both secured sessions (operations `CorrelationIssue`/`CorrelationRedeem`, ADR-024); it can be redeemed over IP only.
-- Sessions are limited in duration and message count (currently 600 s / 1024 records). The client renews them automatically before they expire or warns; a lost IP session is continued over BLE if the device is found there.
+- Sessions are limited in duration and message count (currently 600 s / 1024 records). The client always renews them automatically before they expire (ADR-035); a lost IP session is continued over BLE if the device is found there.
 - Handshakes, messages and connections have time, size and resource limits. Unknown clients must not lock out known clients permanently through global blocks.
 - Secrets appear neither in diagnostic output nor in general configuration exports. AP credentials are a separate authorised retrieval; private identity keys can never be retrieved.
 
@@ -160,6 +161,7 @@ The service checks the available adapter, system and hardware capabilities and r
 - Initialisation takes over the existing network state as the starting point and does not trigger a network switch itself.
 - The restart option is either `LastAccepted` or `DefaultProfile`; both apply to Wi-Fi client and AP mode. The default is `LastAccepted`. A registered client reads and changes it through dedicated operations with a capability report (ADR-025).
 - A default setting is established by a registered client declaring the currently active configuration (saved Wi-Fi or the device's own Wi-Fi) to be it; this is not possible without an active connection or for foreign access points. A set default takes precedence: new connections and the device's own Wi-Fi then stay volatile, and the default is applied again after a restart and after every rollback of an unconfirmed change. The service aligns the autostart rules of its managed profiles with the restart option; after a restart no pending change is automatically accepted as successful.
+- The device reports whether the active configuration differs from the one that applies after a restart. While it does, a registered client can switch back to the persisted configuration at once ("Revert": volatile profiles are dropped, saved networks and the default apply again) or make the current one the default ("Persist") (ADR-034).
 - With the wpa_supplicant fallback, a registered client chooses whether Wi-Fi connections and the device's own Wi-Fi set up successfully later survive a restart (applies to `LastAccepted`) and overwrite the original configuration, or stay volatile. The default is volatile. The choice affects later connections only; what is already saved and foreign profiles stay unchanged. The device reports the choice as a capability.
 - With the wpa_supplicant fallback, a volatile Wi-Fi change, and likewise a volatile device Wi-Fi, persists only as long as it is confirmed. If no authenticated client contacts the device again within a fixed time window (currently 60 seconds), or the connection is lost several times in a row, the service reloads the saved configuration, discards the temporary profiles and applies a defined default. A device Wi-Fi that is itself the default or is to be kept is not rolled back. The "unconfirmed" state is recorded persistently and survives a restart of the service. Saved connections are not affected. This keeps the device reachable if a change interrupts the client's access.
 - On its first start the service generates a distinguishable AP name `Zorvinkel-<device identifier>` and a random device-specific password and never replaces existing values. The AP is not switched on automatically as a result.
@@ -207,9 +209,11 @@ Keys and configuration are stored with restrictive file permissions, atomic chan
 
 ## 9. Later extensions
 
-Terminal and file transfer get their own use cases and adapters behind the existing authorisation. They are offered only over a confirmed IP channel; no emergency terminal is promised for BLE.
+Terminal and file transfer get their own use cases and adapters behind the existing authorisation. File transfer is offered only over a confirmed IP channel.
 
-SSH/SFTP are to be examined first. Registered Zorvinkel identities must be mapped to explicitly permitted operating-system accounts and verified SSH peers. Registration does not mean blanket shell or root access. Shell rights and file paths are limited on the server side; streams get flow control, abort and defined release of resources.
+The terminal is an SSH session run by the client (ADR-030). Over IP it connects to `sshd` directly; over BLE the device service forwards a byte stream of the encrypted channel to the local `sshd`. The BLE path is on by default and can be disabled on the device. Authentication stays with the operating system (password, or a key deposited once for a specific user; with "Easy login" the session key stays on the device and in the client's data directory, unencrypted, until the user switches it off, ADR-032, ADR-033); registration alone grants no shell or root access. After login the client attaches to a `tmux` session, so a reconnect after an interruption or a change of transport reaches the same session. Registered Zorvinkel identities must additionally be mapped to explicitly permitted operating-system accounts and verified SSH peers. Streams get flow control, abort and defined release of resources.
+
+For file transfer SSH/SFTP are to be examined first; file paths are limited on the server side.
 
 A role model and additional transport paths need no changes to the network setup rules. This draft does not define a new development roadmap.
 

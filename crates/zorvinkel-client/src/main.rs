@@ -111,6 +111,19 @@ fn main() -> ExitCode {
             }
         };
     }
+    #[cfg(all(
+        any(unix, windows),
+        feature = "security",
+        feature = "ble-client",
+        feature = "gui"
+    ))]
+    if arguments.len() == 5 && arguments[0] == "--ble-ssh-test" {
+        return ble_ssh_test(&arguments[1..]);
+    }
+    #[cfg(all(any(unix, windows), feature = "security", feature = "ble-client"))]
+    if arguments.len() == 3 && arguments[0] == "--ble-tunnel-test" {
+        return ble_tunnel_test(&arguments[1], &arguments[2]);
+    }
     #[cfg(all(any(unix, windows), feature = "security", feature = "ble-client"))]
     if arguments.len() >= 2 && arguments[0] == "--device-status" {
         return native_status(&arguments[1..]);
@@ -143,9 +156,13 @@ fn main() -> ExitCode {
     if arguments.first().map(String::as_str) == Some("--ble-probe") {
         return run_ble_probe(&arguments[1..]);
     }
+    #[cfg(feature = "ble-client")]
+    if arguments.first().map(String::as_str) == Some("--ble-bench") {
+        return run_ble_bench(&arguments[1..]);
+    }
     if arguments != ["--simulate"] {
         eprintln!(
-            "Usage: zorvinkel-client --simulate | --secure-simulate | --simulate-gui [device-count] | --ble-probe [handle] | --device-status directory [handle] | --device-gui directory | --client-key directory | --trust-device directory handle key-hex (native commands require matching features; persistent native storage requires Unix)"
+            "Usage: zorvinkel-client --simulate | --secure-simulate | --simulate-gui [device-count] | --ble-probe [handle] | --ble-bench [handle] | --ble-tunnel-test directory handle | --device-status directory [handle] | --device-gui directory | --client-key directory | --trust-device directory handle key-hex (native commands require matching features; persistent native storage requires Unix)"
         );
         return ExitCode::FAILURE;
     }
@@ -278,6 +295,188 @@ fn native_status(arguments: &[String]) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("Device status failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Opens a terminal tunnel to a device and reads the start of the SSH exchange (ADR-031).
+#[cfg(all(any(unix, windows), feature = "security", feature = "ble-client"))]
+fn ble_tunnel_test(directory: &str, handle: &str) -> ExitCode {
+    use zorvinkel_application::setup::{SetupBackend, SetupRequest};
+    let result = (|| {
+        let mut backend =
+            zorvinkel_adapters::ble::setup::NativeSetup::open(std::path::Path::new(directory))?;
+        backend.force_bluetooth();
+        backend
+            .handle(SetupRequest::Discover)
+            .map_err(|_| "discovery failed")?;
+        let update = backend
+            .handle(SetupRequest::Connect(handle.to_owned()))
+            .map_err(|_| "connection failed")?;
+        if update.error.is_some() {
+            return Err("device request failed".into());
+        }
+        println!("{}", backend.probe_tunnel()?);
+        backend
+            .handle(SetupRequest::Disconnect)
+            .map_err(|_| "disconnect failed")?;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Tunnel test failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Radio measurement against `zorvinkeld --ble-bench` (ADR-031): sizes, latency, throughput.
+#[cfg(feature = "ble-client")]
+fn run_ble_bench(arguments: &[String]) -> ExitCode {
+    if arguments.len() > 1 {
+        eprintln!("Usage: zorvinkel-client --ble-bench [device-handle]");
+        return ExitCode::FAILURE;
+    }
+    let result = (|| {
+        let runtime = tokio::runtime::Runtime::new()?;
+        runtime.block_on(zorvinkel_adapters::ble::bench::run_bench(
+            arguments.first().map(String::as_str),
+        ))
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("BLE bench failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Real SSH session through the Bluetooth tunnel (ADR-031): key login, `tmux`, and the delay of
+/// keystroke echoes. Accepts any host key; it is a measurement tool, not a terminal.
+#[cfg(all(
+    any(unix, windows),
+    feature = "security",
+    feature = "ble-client",
+    feature = "gui"
+))]
+fn ble_ssh_test(arguments: &[String]) -> ExitCode {
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+    use zorvinkel_application::setup::{SetupBackend, SetupRequest};
+    use zorvinkel_terminal::{
+        ByteStream, ConnectError, ConnectionStatus, Credentials, Dialer, Dialing, ResumableEvent,
+        ResumableTerminal, RetryPolicy, SshConnector, TerminalSize,
+    };
+    struct Once(std::sync::Mutex<Option<tokio::io::DuplexStream>>);
+    impl Dialer for Once {
+        fn dial(&self) -> Dialing<'_> {
+            let stream = self.0.lock().ok().and_then(|mut slot| slot.take());
+            Box::pin(async move {
+                stream
+                    .map(|stream| Box::new(stream) as Box<dyn ByteStream>)
+                    .ok_or_else(|| ConnectError::Refused("tunnel already used".into()))
+            })
+        }
+    }
+    let result = (|| {
+        let [directory, handle, user, key_file] = arguments else {
+            return Err("Usage: --ble-ssh-test directory handle user key-file".into());
+        };
+        let mut backend =
+            zorvinkel_adapters::ble::setup::NativeSetup::open(std::path::Path::new(directory))?;
+        backend.force_bluetooth();
+        backend
+            .handle(SetupRequest::Discover)
+            .map_err(|_| "discovery failed")?;
+        let update = backend
+            .handle(SetupRequest::Connect(handle.clone()))
+            .map_err(|_| "connection failed")?;
+        if update.error.is_some() {
+            return Err("device request failed".into());
+        }
+        let stream = backend.open_tunnel()?;
+        let key = std::fs::read_to_string(key_file)?;
+        let credentials = Credentials::private_key(user, &key, None).map_err(|_| "key rejected")?;
+        let runtime = tokio::runtime::Runtime::new()?;
+        runtime.block_on(async {
+            let connector = SshConnector::with_dialer(
+                Arc::new(Once(std::sync::Mutex::new(Some(stream)))),
+                credentials,
+                Arc::new(|fingerprint: &str| {
+                    println!("Host key {fingerprint}");
+                    true
+                }),
+            );
+            let started = Instant::now();
+            let mut terminal = ResumableTerminal::start(
+                connector,
+                TerminalSize::new(100, 30).expect("size"),
+                RetryPolicy::default(),
+                || {},
+            );
+            let wait = Duration::from_secs(30);
+            loop {
+                match tokio::time::timeout(wait, terminal.next_event()).await {
+                    Ok(Some(ResumableEvent::Status(ConnectionStatus::Connected))) => break,
+                    Ok(Some(ResumableEvent::Status(ConnectionStatus::Failed(error)))) => {
+                        return Err(format!("login failed: {error}").into());
+                    }
+                    Ok(Some(_)) => {}
+                    _ => return Err("no connection within 30 s".into()),
+                }
+            }
+            println!("SSH session open after {:?}", started.elapsed());
+            // Let the shell and `tmux` settle, then time single keystrokes.
+            let settle = tokio::time::sleep(Duration::from_secs(2));
+            tokio::pin!(settle);
+            loop {
+                tokio::select! {
+                    () = &mut settle => break,
+                    _ = terminal.next_event() => {}
+                }
+            }
+            let mut samples = Vec::new();
+            for _ in 0..30 {
+                let sent = Instant::now();
+                terminal
+                    .input(b"x".to_vec())
+                    .await
+                    .map_err(|_| "input failed")?;
+                loop {
+                    match tokio::time::timeout(Duration::from_secs(5), terminal.next_event()).await
+                    {
+                        Ok(Some(ResumableEvent::Output(_))) => break,
+                        Ok(Some(_)) => {}
+                        _ => return Err("no echo within 5 s".into()),
+                    }
+                }
+                samples.push(sent.elapsed());
+            }
+            samples.sort();
+            println!(
+                "Keystroke echo: median {:?}, 95th percentile {:?}, maximum {:?} ({} samples)",
+                samples[samples.len() / 2],
+                samples[samples.len() * 95 / 100],
+                samples[samples.len() - 1],
+                samples.len()
+            );
+            terminal.input(b"\x15exit\r".to_vec()).await.ok();
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        })?;
+        backend
+            .handle(SetupRequest::Disconnect)
+            .map_err(|_| "disconnect failed")?;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("SSH test failed: {error}");
             ExitCode::FAILURE
         }
     }

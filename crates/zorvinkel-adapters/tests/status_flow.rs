@@ -41,6 +41,7 @@ fn unknown_discovery_handle_does_not_select_another_device() {
     let unknown = DiscoveredDevice {
         handle: "unknown".into(),
         display_name: "Simulated Zorvinkel".into(),
+        ..Default::default()
     };
     assert_eq!(client.read_status(&unknown), Err(PortError::Disconnected));
 }

@@ -17,6 +17,9 @@ pub trait NetworkStatusSource {
     fn service_control(&mut self) -> Option<&mut dyn crate::services::ServiceControl> {
         None
     }
+    fn tunnel_control(&mut self) -> Option<&mut dyn crate::tunnel::TunnelControl> {
+        None
+    }
     /// The device accepts authenticated IP connections for the reachability test.
     fn ip_endpoint_available(&self) -> bool {
         false

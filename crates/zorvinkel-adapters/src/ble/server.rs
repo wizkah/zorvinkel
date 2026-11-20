@@ -1,4 +1,9 @@
 use super::{BleResult, PROBE, ProbeSession, Profile};
+use crate::{
+    security::service::TunnelGrant,
+    tunnel_gate::SSHD_ADDRESS,
+    tunnel_io::{FrameLink, forward},
+};
 use bluer::{
     Address,
     adv::Advertisement,
@@ -12,12 +17,14 @@ use bluer::{
     },
 };
 use futures_util::{FutureExt, StreamExt};
-use std::{collections::BTreeMap, future::Future, time::Duration};
+use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 use tokio::{
-    sync::mpsc,
+    net::TcpStream,
+    sync::{Mutex as AsyncMutex, mpsc},
     time::{Instant, timeout},
 };
 use uuid::Uuid;
+use zorvinkel_protocol::tunnel::{CloseReason, MAX_FRAME, Record, WINDOW_FRAMES};
 use zorvinkel_protocol::{ble::BASELINE_FRAME_LENGTH, probe};
 
 struct Peer {
@@ -47,6 +54,12 @@ pub trait ServerBackend {
         message: &[u8],
         now: Duration,
     ) -> BleResult<Option<Vec<u8>>>;
+    /// The largest frame the connection can notify to the client, for the tunnel (ADR-031).
+    fn tunnel_frame_limit(&mut self, _connection: u64, _limit: usize) {}
+    /// A tunnel the last message of `connection` opened; the server forwards it to `sshd`.
+    fn take_tunnel(&mut self, _connection: u64) -> Option<TunnelGrant> {
+        None
+    }
     fn poll(&mut self, now: Duration) -> BleResult<()>;
     fn closed(&self, connection: u64, now: Duration) -> bool;
     fn remove(&mut self, connection: u64);
@@ -86,7 +99,14 @@ pub async fn serve(
     }
     let (control, notify_handle) = characteristic_control();
     let (writes, mut received) = mpsc::channel::<(Address, Vec<u8>)>(32);
-    let application = application(profile, writes, notify_handle);
+    let (tunnel_control, tunnel_notify_handle) = characteristic_control();
+    let (tunnel_writes, mut tunnel_received) = mpsc::channel::<(Address, Vec<u8>)>(64);
+    let application = application(
+        profile,
+        writes,
+        notify_handle,
+        (tunnel_writes, tunnel_notify_handle),
+    );
     let app_handle = timeout(
         Duration::from_secs(10),
         adapter.serve_gatt_application(application),
@@ -108,7 +128,10 @@ pub async fn serve(
     println!("BLE ready: {name}-{suffix}");
     backend.ready(&format!("{name}-{suffix}"), started.elapsed());
     let mut peers = BTreeMap::<Address, Peer>::new();
-    tokio::pin!(shutdown, control);
+    // Per peer: where its tunnel notifications go, and where its tunnel frames are delivered.
+    let mut tunnel_notifiers = BTreeMap::<Address, Arc<AsyncMutex<CharacteristicWriter>>>::new();
+    let mut tunnels = BTreeMap::<Address, mpsc::Sender<Vec<u8>>>::new();
+    tokio::pin!(shutdown, control, tunnel_control);
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let outcome: BleResult<()> = async {
         loop {
@@ -128,6 +151,8 @@ pub async fn serve(
                     }).collect();
                     for (address, still_open) in expired {
                         if let Some(peer) = peers.remove(&address) { backend.remove(peer.connection); }
+                        tunnels.remove(&address);
+                        tunnel_notifiers.remove(&address);
                         // A closed notifier can belong to the previous connection of this peer.
                         if still_open { disconnect(&adapter, address).await; }
                     }
@@ -147,13 +172,52 @@ pub async fn serve(
                     Some(_) => (),
                     None => return Err("notification control stream stopped".into()),
                 },
+                event = tunnel_control.next() => match event {
+                    Some(CharacteristicControlEvent::Notify(writer)) => {
+                        let address = writer.device_address();
+                        tunnels.remove(&address);
+                        tunnel_notifiers.insert(address, Arc::new(AsyncMutex::new(writer)));
+                    }
+                    Some(_) => (),
+                    None => return Err("tunnel control stream stopped".into()),
+                },
+                request = tunnel_received.recv() => {
+                    let Some((address, frame)) = request else { return Err("tunnel write queue stopped".into()); };
+                    if let Some(frames) = tunnels.get(&address)
+                        && frames.try_send(frame).is_err()
+                    {
+                        // A tunnel that cannot keep up broke the window; it ends, the link stays.
+                        tunnels.remove(&address);
+                    }
+                },
                 request = received.recv() => {
                     let Some((address, frame)) = request else { return Err("write queue stopped".into()); };
                     let Some(peer) = peers.get_mut(&address) else { continue; };
-                    if let Err(error) = process_frame(peer, &frame, &mut backend, started.elapsed()).await {
-                        eprintln!("BLE session failed: {error}");
-                        if let Some(peer) = peers.remove(&address) { backend.remove(peer.connection); }
-                        disconnect(&adapter, address).await;
+                    // What the tunnel notification can carry; none means the client did not subscribe.
+                    let limit = match tunnel_notifiers.get(&address) {
+                        Some(writer) => writer.lock().await.mtu(),
+                        None => 0,
+                    };
+                    backend.tunnel_frame_limit(peer.connection, limit);
+                    match process_frame(peer, &frame, &mut backend, started.elapsed()).await {
+                        Ok(()) => {
+                            if let Some(grant) = backend.take_tunnel(peer.connection) {
+                                match tunnel_notifiers.get(&address) {
+                                    Some(writer) => {
+                                        tunnels.insert(address, start_tunnel(grant, writer.clone(), started));
+                                    }
+                                    // Cannot happen while the limit above keeps it unavailable.
+                                    None => drop(grant),
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("BLE session failed: {error}");
+                            if let Some(peer) = peers.remove(&address) { backend.remove(peer.connection); }
+                            tunnels.remove(&address);
+                            tunnel_notifiers.remove(&address);
+                            disconnect(&adapter, address).await;
+                        }
                     }
                 },
 
@@ -180,52 +244,81 @@ fn application(
     profile: Profile,
     writes: mpsc::Sender<(Address, Vec<u8>)>,
     notify_handle: bluer::gatt::local::CharacteristicControlHandle,
+    tunnel: (
+        mpsc::Sender<(Address, Vec<u8>)>,
+        bluer::gatt::local::CharacteristicControlHandle,
+    ),
 ) -> Application {
+    let mut characteristics = characteristic_pair(
+        profile.write,
+        profile.notify,
+        writes,
+        notify_handle,
+        BASELINE_FRAME_LENGTH,
+    );
+    // Tunnel frames travel one record per value, up to the largest agreed frame (ADR-031).
+    if let Some((write, notify)) = profile.tunnel {
+        characteristics.extend(characteristic_pair(
+            write, notify, tunnel.0, tunnel.1, MAX_FRAME,
+        ));
+    }
     Application {
         services: vec![Service {
             uuid: Uuid::from_u128(profile.service),
             primary: true,
-            characteristics: vec![
-                Characteristic {
-                    uuid: Uuid::from_u128(profile.write),
-                    write: Some(CharacteristicWrite {
-                        write: true,
-                        // BlueZ 5.50 otherwise leaves confirmed writes pending until timeout.
-                        write_without_response: true,
-                        method: CharacteristicWriteMethod::Fun(Box::new(move |value, request| {
-                            let writes = writes.clone();
-                            async move {
-                                if request.offset != 0 {
-                                    return Err(ReqError::InvalidOffset);
-                                }
-                                if value.len() > BASELINE_FRAME_LENGTH {
-                                    return Err(ReqError::InvalidValueLength);
-                                }
-                                writes
-                                    .try_send((request.device_address, value))
-                                    .map_err(|_| ReqError::InProgress)
-                            }
-                            .boxed()
-                        })),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                Characteristic {
-                    uuid: Uuid::from_u128(profile.notify),
-                    notify: Some(CharacteristicNotify {
-                        notify: true,
-                        method: CharacteristicNotifyMethod::Io,
-                        ..Default::default()
-                    }),
-                    control_handle: notify_handle,
-                    ..Default::default()
-                },
-            ],
+            characteristics,
             ..Default::default()
         }],
         ..Default::default()
     }
+}
+
+/// A write characteristic that hands values of at most `limit` bytes to `writes`, and a
+/// notification characteristic served through `notify_handle`.
+fn characteristic_pair(
+    write: u128,
+    notify: u128,
+    writes: mpsc::Sender<(Address, Vec<u8>)>,
+    notify_handle: bluer::gatt::local::CharacteristicControlHandle,
+    limit: usize,
+) -> Vec<Characteristic> {
+    vec![
+        Characteristic {
+            uuid: Uuid::from_u128(write),
+            write: Some(CharacteristicWrite {
+                write: true,
+                // BlueZ 5.50 otherwise leaves confirmed writes pending until timeout.
+                write_without_response: true,
+                method: CharacteristicWriteMethod::Fun(Box::new(move |value, request| {
+                    let writes = writes.clone();
+                    async move {
+                        if request.offset != 0 {
+                            return Err(ReqError::InvalidOffset);
+                        }
+                        if value.len() > limit {
+                            return Err(ReqError::InvalidValueLength);
+                        }
+                        writes
+                            .try_send((request.device_address, value))
+                            .map_err(|_| ReqError::InProgress)
+                    }
+                    .boxed()
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        Characteristic {
+            uuid: Uuid::from_u128(notify),
+            notify: Some(CharacteristicNotify {
+                notify: true,
+                method: CharacteristicNotifyMethod::Io,
+                ..Default::default()
+            }),
+            control_handle: notify_handle,
+            ..Default::default()
+        },
+    ]
 }
 
 async fn process_frame(
@@ -261,4 +354,45 @@ async fn disconnect(adapter: &bluer::Adapter, address: Address) {
     ) {
         eprintln!("BLE peer could not be disconnected");
     }
+}
+
+/// Forwards one tunnel to `sshd` on loopback and its frames back through the notification
+/// characteristic. Returns where the peer's tunnel frames are delivered; dropping it ends the
+/// tunnel. The permit in the grant frees the device's tunnel slot when the tunnel is over.
+fn start_tunnel(
+    grant: TunnelGrant,
+    writer: Arc<AsyncMutex<CharacteristicWriter>>,
+    started: Instant,
+) -> mpsc::Sender<Vec<u8>> {
+    let (frames_in, incoming) = mpsc::channel::<Vec<u8>>(64);
+    let (outgoing, mut to_notify) = mpsc::channel::<Vec<u8>>(64);
+    let clock = move || started.elapsed();
+    tokio::spawn(async move {
+        let TunnelGrant { mut cipher, permit } = grant;
+        let sshd = timeout(Duration::from_secs(2), TcpStream::connect(SSHD_ADDRESS)).await;
+        let Ok(Ok(sshd)) = sshd else {
+            if let Ok(frame) = cipher.seal(&Record::Close(CloseReason::Backend), clock()) {
+                let _ = outgoing.send(frame).await;
+            }
+            return;
+        };
+        let end = forward(
+            cipher,
+            WINDOW_FRAMES,
+            FrameLink { incoming, outgoing },
+            sshd,
+            clock,
+            move || !permit.is_cancelled(),
+        )
+        .await;
+        println!("Tunnel ended: {end:?}");
+    });
+    tokio::spawn(async move {
+        while let Some(frame) = to_notify.recv().await {
+            if writer.lock().await.send(&frame).await.is_err() {
+                break;
+            }
+        }
+    });
+    frames_in
 }

@@ -313,6 +313,7 @@ fn registered_display_names_survive_reopening_without_changing_trust() {
     let mut devices = vec![DiscoveredDevice {
         handle: "first".into(),
         display_name: "Pi-967C".into(),
+        ..Default::default()
     }];
     apply(&mut devices, &names::read(&root).unwrap());
     assert_eq!(devices[0].display_name, "Pi · 01010101");

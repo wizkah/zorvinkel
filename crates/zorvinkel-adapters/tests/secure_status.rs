@@ -2061,7 +2061,10 @@ fn restart_option_is_encrypted_authorized_and_offered_only_when_supported() {
             Operation::RestartPolicyRead,
             &[]
         ),
-        ResponseBody::RestartPolicy(wire::RestartState::DefaultWifi)
+        ResponseBody::RestartPolicy(wire::RestartReport {
+            state: wire::RestartState::DefaultWifi,
+            differs: false
+        })
     );
     assert_eq!(
         call(
@@ -2085,7 +2088,10 @@ fn restart_option_is_encrypted_authorized_and_offered_only_when_supported() {
             Operation::RestartPolicyRead,
             &[]
         ),
-        ResponseBody::RestartPolicy(wire::RestartState::DefaultAccessPoint)
+        ResponseBody::RestartPolicy(wire::RestartReport {
+            state: wire::RestartState::DefaultAccessPoint,
+            differs: false
+        })
     );
     wifi.state = None;
     assert_eq!(

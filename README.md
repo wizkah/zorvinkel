@@ -11,7 +11,7 @@ Zorvinkel is a local administration tool for headless Linux devices such as a Ra
 
 A graphical client (macOS, Windows, Linux) finds the device nearby over Bluetooth Low Energy (BLE) and, once it is on the local network, via mDNS/DNS-SD. It registers with the device and sets up Wi-Fi. There is no cloud and no account. Once the device is on a network, the client reaches it over IP with the same operations.
 
-> **Status: early development (v0.1, pre-release).** The design is a draft, and parts of the implementation have only been tried on specific hardware and operating systems. Read the [validation notes](docs/validation/) before relying on it, and do not use it to protect anything that matters yet.
+> **Status: early development (v0.1, pre-release).** The design is a draft, and parts of the implementation have only been tried on specific hardware and operating systems. The terminal over Bluetooth and the newest GUI changes have not been checked on a real device or screen. Read the [validation notes](docs/validation/) before relying on it, and do not use it to protect anything that matters yet.
 
 <p align="center">
   <img src="docs/screenshots/devices.png" alt="Device list of the Zorvinkel client (simulation)" width="49%">
@@ -24,8 +24,9 @@ A graphical client (macOS, Windows, Linux) finds the device nearby over Bluetoot
 - **Discovery:** finds devices over BLE, and over the local network via mDNS/DNS-SD.
 - **Registration:** the first client to register becomes the administrator (Trust on First Use). Further clients need a grant from an already registered client or a local administrator. Keys can also be deposited in advance to avoid the first-contact risk.
 - **Secure channel:** the same authenticated, encrypted message contract over BLE and IP, based on the Noise XX handshake.
-- **Network setup:** scan and join Wi-Fi networks, or switch the device to its own access point (shown as a QR code) when no network is available. A restart option controls which configuration the device falls back to.
+- **Network setup:** scan and join Wi-Fi networks, or switch the device to its own access point (shown as a QR code) when no network is available. After a change, "Revert" switches the device back to its persisted configuration and "Persist" makes the current one the default for restarts.
 - **Device information and services:** system status, power control (restart/shutdown) and configured services of the device (for example Raspotify), with optional start/stop/restart actions.
+- **Terminal:** an interactive terminal to the device, an SSH session to its own `sshd` with `tmux` reattach. It runs over IP, or through an encrypted tunnel over Bluetooth when the device has no network, and follows the device when its way changes. "Easy login" can keep a session key so later logins need no password. Registering with Zorvinkel grants no shell; the device's operating-system account still logs in. See [packaging/Terminal.md](packaging/Terminal.md).
 - **Local administration:** `zorvinkel-admin` grants registrations and blocks lost clients on the device itself.
 - **Languages:** the GUI is available in English and German and follows the system language.
 
@@ -39,6 +40,7 @@ A graphical client (macOS, Windows, Linux) finds the device nearby over Bluetoot
 | `zorvinkel-core` | Domain types and rules |
 | `zorvinkel-application` | Client and device use cases with their ports |
 | `zorvinkel-protocol` | Versioned messages and encoding |
+| `zorvinkel-terminal` | SSH terminal session with `tmux` reattach and terminal emulation |
 | `zorvinkel-adapters` | Platform, transport, security and storage adapters |
 
 ## Getting started
@@ -65,6 +67,7 @@ Packaging and installation:
 - [packaging/BUILD.md](packaging/BUILD.md): macOS app bundle, Windows client build and cross-builds for the Raspberry Pi (32 and 64 bit).
 - `packaging/linux/install.sh`: installs the device service on the Pi.
 - [packaging/Services.md](packaging/Services.md): showing device services in the client.
+- [packaging/Terminal.md](packaging/Terminal.md): requirements and the switch for the terminal on the device.
 
 ## Documentation
 

@@ -4,6 +4,7 @@ pub mod handshake;
 pub mod identity;
 pub mod service;
 pub mod simulation;
+pub mod tunnel;
 
 pub const PROFILE: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

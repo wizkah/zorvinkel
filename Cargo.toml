@@ -15,6 +15,7 @@ zorvinkel-core = { path = "crates/zorvinkel-core" }
 zorvinkel-application = { path = "crates/zorvinkel-application" }
 zorvinkel-protocol = { path = "crates/zorvinkel-protocol" }
 zorvinkel-adapters = { path = "crates/zorvinkel-adapters" }
+zorvinkel-terminal = { path = "crates/zorvinkel-terminal" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

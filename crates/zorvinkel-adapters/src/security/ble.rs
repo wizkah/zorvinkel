@@ -72,6 +72,18 @@ impl Responder {
             Phase::Closed => Err(SecureError::Closed),
         }
     }
+    /// The tunnel a `TunnelOpen` just granted; the transport starts forwarding with it.
+    pub fn take_tunnel(&mut self) -> Option<super::service::TunnelGrant> {
+        match &mut self.phase {
+            Phase::Established(session) => session.take_tunnel(),
+            _ => None,
+        }
+    }
+    pub fn set_tunnel_frame_limit(&mut self, limit: usize) {
+        if let Phase::Established(session) = &mut self.phase {
+            session.set_tunnel_frame_limit(limit);
+        }
+    }
     pub fn closed(&self, now: Duration) -> bool {
         match &self.phase {
             Phase::First(_) | Phase::Final(_) => {

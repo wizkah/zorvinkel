@@ -17,3 +17,5 @@ pub mod services;
 pub mod ip;
 
 pub mod restart;
+
+pub mod tunnel;

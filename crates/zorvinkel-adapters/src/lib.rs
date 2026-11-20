@@ -41,3 +41,8 @@ pub mod discovery;
 pub mod identity;
 #[cfg(feature = "security")]
 pub mod security;
+
+#[cfg(feature = "tunnel")]
+pub mod tunnel_gate;
+#[cfg(feature = "tunnel")]
+pub mod tunnel_io;

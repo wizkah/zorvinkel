@@ -73,6 +73,8 @@ pub struct WifiController {
     registry: PathBuf,
     root: PathBuf,
     confirm: Arc<AtomicBool>,
+    /// Kept up to date by the worker: the active configuration is not what applies after a restart.
+    differs: Arc<AtomicBool>,
     access_point: bool,
 }
 impl WifiController {
@@ -116,6 +118,8 @@ impl WifiController {
         let worker_root = root.clone();
         let confirm = Arc::new(AtomicBool::new(false));
         let worker_confirm = confirm.clone();
+        let differs = Arc::new(AtomicBool::new(false));
+        let worker_differs = differs.clone();
         let offers_access_point = control.access_point_supported();
         // The device owns individual credentials from its first start on; the
         // access point itself stays off until a client switches it on.
@@ -139,6 +143,7 @@ impl WifiController {
                     journal,
                     &worker_root,
                     &worker_confirm,
+                    &worker_differs,
                 );
             })
             .map_err(|_| WifiError::Unavailable)?;
@@ -148,6 +153,7 @@ impl WifiController {
             registry: registry.into(),
             root,
             confirm,
+            differs,
             access_point: offers_access_point,
         })
     }
@@ -180,7 +186,14 @@ impl WifiController {
                 digest.update([2, u8::from(*enabled)]);
             }
             Work::Restart(change) => {
-                digest.update([3, u8::from(*change == RestartChange::CurrentAsDefault)]);
+                digest.update([
+                    3,
+                    match change {
+                        RestartChange::LastAccepted => 0,
+                        RestartChange::CurrentAsDefault => 1,
+                        RestartChange::Revert => 2,
+                    },
+                ]);
             }
         }
         let fingerprint: [u8; 32] = digest.finalize().into();
@@ -348,6 +361,9 @@ impl WifiSetupControl for WifiController {
                 RestartState::DefaultAccessPoint
             }
         })
+    }
+    fn restart_differs(&mut self, _: &ClientKey) -> bool {
+        self.differs.load(Ordering::SeqCst)
     }
     fn change_restart(
         &mut self,
@@ -528,6 +544,7 @@ fn run_worker(
     tasks: Tasks,
     root: &Path,
     confirm: &AtomicBool,
+    differs: &AtomicBool,
 ) {
     let mut reconciled = false;
     // A default is applied again; otherwise a kept access point is switched on again, and a
@@ -585,6 +602,9 @@ fn run_worker(
                     revert_unconfirmed(&mut network, &mut store, root);
                     watch = None;
                 }
+                if reconciled {
+                    publish_differs(&mut network, &mut store, differs);
+                }
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -607,6 +627,8 @@ fn run_worker(
                 eprintln!("Network change cannot be tracked for revert");
             }
         }
+        // The comparison is current before the client polls the task that changed it.
+        publish_differs(&mut network, &mut store, differs);
         if let Ok(mut tasks) = tasks.lock()
             && let Some(task) = tasks.get_mut(&job.id)
         {
@@ -614,18 +636,51 @@ fn run_worker(
         }
     }
 }
-/// A volatile change nobody confirmed is given up: back to the saved configuration, and to
-/// the default where one is set.
-fn revert_unconfirmed(network: &mut impl StackControl, store: &mut impl StateStore, root: &Path) {
-    if network.revert_volatile().is_err() {
+/// Whether the active configuration differs from the one that applies after a restart: with a
+/// default, when the active network is not the default; otherwise, while the connection is one
+/// of the service's own volatile profiles. A failed reading leaves the last answer in place.
+fn publish_differs(
+    network: &mut impl StackControl,
+    store: &mut impl StateStore,
+    differs: &AtomicBool,
+) {
+    let answer = (|| {
+        Some(match restart_of(store).ok()? {
+            Restart::LastAccepted => network.owned_connection_active().ok()?,
+            Restart::DefaultWifi(ssid) => {
+                let profile = network.saved_wifi_profile(&ssid).ok()??;
+                network.observe().ok()? != NetworkConfiguration::Wifi(profile)
+            }
+            Restart::DefaultAccessPoint => !matches!(
+                network.observe().ok()?,
+                NetworkConfiguration::AccessPoint(_)
+            ),
+        })
+    })();
+    if let Some(answer) = answer {
+        differs.store(answer, Ordering::SeqCst);
+    }
+}
+/// Back to what applies after a restart: the volatile profiles go, the saved configuration
+/// returns, and so does the default where one is set.
+fn revert_to_persisted(
+    network: &mut impl StackControl,
+    store: &mut impl StateStore,
+    root: &Path,
+) -> Result<(), ()> {
+    let reverted = network.revert_volatile().map_err(|_| {
         eprintln!("Original network settings could not be restored");
-    }
+    });
     let _ = std::fs::remove_file(pending_path(root));
-    if let Ok(restart) = restart_of(store)
-        && apply_restart_default(network, root, &restart).is_err()
-    {
+    let restart = restart_of(store)?;
+    apply_restart_default(network, root, &restart).map_err(|()| {
         eprintln!("Default network configuration could not be applied");
-    }
+    })?;
+    reverted
+}
+/// A volatile change nobody confirmed is given up.
+fn revert_unconfirmed(network: &mut impl StackControl, store: &mut impl StateStore, root: &Path) {
+    let _ = revert_to_persisted(network, store, root);
 }
 /// Executes one queued task; the flag says that the result stays volatile and needs a client to
 /// confirm it.
@@ -726,6 +781,10 @@ fn run_job(
                     .map_err(|_| ())?;
                 Ok(WifiTaskState::Connected)
             }
+            Work::Restart(RestartChange::Revert) => {
+                revert_to_persisted(network, store, root)?;
+                Ok(WifiTaskState::Connected)
+            }
             Work::Restart(RestartChange::CurrentAsDefault) => {
                 let active = network.observe().map_err(|_| ())?;
                 match &active {
@@ -791,6 +850,7 @@ mod tests {
             registry,
             root: root.clone(),
             confirm: Arc::default(),
+            differs: Arc::default(),
             access_point: false,
         };
         wifi.connect(&actor, 41, "Event", "test-password").unwrap();
@@ -857,6 +917,7 @@ mod tests {
             registry,
             root: root.clone(),
             confirm: Arc::default(),
+            differs: Arc::default(),
             access_point: false,
         };
         assert!(wifi.persistence_supported());
@@ -892,6 +953,7 @@ mod tests {
             registry,
             root: root.clone(),
             confirm: Arc::default(),
+            differs: Arc::default(),
             access_point: true,
         };
         assert!(wifi.access_point_supported());
@@ -1280,6 +1342,41 @@ mod tests {
     }
 
     #[test]
+    fn the_comparison_and_the_revert_follow_what_applies_after_a_restart() {
+        let mut rig = Rig::new("differs");
+        let flag = AtomicBool::new(false);
+        let mut differs = |rig: &mut Rig| {
+            publish_differs(&mut rig.fake, &mut rig.store, &flag);
+            flag.load(Ordering::SeqCst)
+        };
+        // Nothing changed yet.
+        assert!(!differs(&mut rig));
+        // A connection that was not kept is volatile: it differs, and a revert drops it at once.
+        rig.connect(1);
+        assert!(differs(&mut rig));
+        rig.fake.log.clear();
+        let (state, volatile) = rig.run(2, Work::Restart(RestartChange::Revert));
+        assert_eq!((state, volatile), (WifiTaskState::Connected, false));
+        assert_eq!(rig.fake.log[0], "revert");
+        assert!(!differs(&mut rig));
+        // With a saved network as default, the other network differs and a revert joins it.
+        rig.fake.saved.push("Home".into());
+        set_restart_policy(
+            &mut rig.store,
+            &rig.actor,
+            RestartPolicy::DefaultProfile(NetworkConfiguration::Wifi(profile("wpa", "Home", 100))),
+        )
+        .unwrap();
+        rig.connect(3);
+        assert!(differs(&mut rig));
+        rig.fake.log.clear();
+        rig.run(4, Work::Restart(RestartChange::Revert));
+        assert_eq!(rig.fake.log[0], "revert");
+        assert!(rig.fake.log[1].starts_with("apply ConnectWifi"));
+        assert!(!differs(&mut rig));
+    }
+
+    #[test]
     fn the_restart_option_is_readable_only_for_registered_clients() {
         let mut rig = Rig::new("state");
         let (sender, _receiver) = mpsc::sync_channel(1);
@@ -1289,6 +1386,7 @@ mod tests {
             registry: rig.root.join("registry"),
             root: rig.root.clone(),
             confirm: Arc::default(),
+            differs: Arc::default(),
             access_point: true,
         };
         assert!(wifi.restart_supported());

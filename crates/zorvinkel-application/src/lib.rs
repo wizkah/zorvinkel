@@ -41,3 +41,5 @@ pub mod power;
 pub mod system;
 
 pub mod services;
+
+pub mod tunnel;

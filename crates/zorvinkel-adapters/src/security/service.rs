@@ -1,6 +1,14 @@
-use super::{SecureError, channel::SecureChannel, handshake::Role};
+use super::{
+    SecureError,
+    channel::SecureChannel,
+    handshake::Role,
+    tunnel::{TunnelCipher, accept as accept_tunnel},
+};
 use std::{
-    sync::{Arc, Mutex, Weak},
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use zeroize::Zeroizing;
@@ -14,6 +22,7 @@ use zorvinkel_core::{
     NetworkStatus,
     registry::{ClientKey, RegistryError},
 };
+use zorvinkel_protocol::tunnel::{MIN_FRAME, OpenRequest, WINDOW_FRAMES};
 use zorvinkel_protocol::{ip::CorrelationToken, status::*};
 
 #[derive(Clone, Copy)]
@@ -77,8 +86,57 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
             == 0
 }
 
+/// Absolute lifetime of a tunnel (ADR-031); the number is provisional until it is decided.
+pub const TUNNEL_LIFETIME: Duration = Duration::from_secs(8 * 3600);
+
+/// At most one tunnel per device. The slot also lets a revoked client end its tunnel.
+#[derive(Default)]
+struct TunnelSlot(Mutex<Option<(ClientKey, Arc<AtomicBool>)>>);
+
+/// Held by the running tunnel; frees the slot when dropped.
+pub struct TunnelPermit {
+    slot: Arc<TunnelSlot>,
+    cancelled: Arc<AtomicBool>,
+}
+impl TunnelPermit {
+    /// The client lost its registration: the tunnel must end.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+}
+impl Drop for TunnelPermit {
+    fn drop(&mut self) {
+        if let Ok(mut owner) = self.slot.0.lock() {
+            *owner = None;
+        }
+    }
+}
+fn claim_tunnel_slot(slot: &Arc<TunnelSlot>, client: &ClientKey) -> Option<TunnelPermit> {
+    let mut owner = slot.0.lock().ok()?;
+    if owner.is_some() {
+        return None;
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    *owner = Some((client.clone(), cancelled.clone()));
+    Some(TunnelPermit {
+        slot: slot.clone(),
+        cancelled,
+    })
+}
+
+/// What a successful `TunnelOpen` leaves for the transport: the cipher and the slot permit.
+pub struct TunnelGrant {
+    pub cipher: TunnelCipher,
+    pub permit: TunnelPermit,
+}
+
 struct DeviceSessionState {
     channel: SecureChannel,
+    tunnel_slot: Arc<TunnelSlot>,
+    granted_tunnel: Option<TunnelGrant>,
+    /// Largest frame the transport can deliver to the client; set by the Bluetooth server from
+    /// the negotiated notification size.
+    tunnel_frame_limit: usize,
     correlations: CorrelationBook,
     authorized: bool,
     next_id: u64,
@@ -109,6 +167,9 @@ impl DeviceSession {
             next_id: 1,
             over_ip,
             correlations: sessions.correlations.clone(),
+            tunnel_slot: sessions.tunnel_slot.clone(),
+            granted_tunnel: None,
+            tunnel_frame_limit: usize::MAX,
         }));
         sessions.attach(&state)?;
         Ok(Self(state))
@@ -123,6 +184,16 @@ impl DeviceSession {
             state.channel.close();
             state.authorized = false;
         }
+    }
+    /// Tells the session how large a frame the transport can carry to the client.
+    pub fn set_tunnel_frame_limit(&mut self, limit: usize) {
+        if let Ok(mut state) = self.0.lock() {
+            state.tunnel_frame_limit = limit;
+        }
+    }
+    /// The tunnel the last `TunnelOpen` granted, once; the transport starts forwarding with it.
+    pub fn take_tunnel(&mut self) -> Option<TunnelGrant> {
+        self.0.lock().ok()?.granted_tunnel.take()
     }
     pub fn handle(
         &mut self,
@@ -251,8 +322,14 @@ impl DeviceSessionState {
                     },
                 )
             }
+            Operation::TunnelOpen => Ok(self.open_tunnel(payload, actor, network, now)),
             Operation::Capabilities => Ok(ResponseBody::Capabilities(
                 CAPABILITIES
+                    | if network.tunnel_control().is_some() {
+                        zorvinkel_protocol::tunnel::CAP_TUNNEL
+                    } else {
+                        0
+                    }
                     | if network.ip_endpoint_available() {
                         zorvinkel_protocol::ip::CAP_IP_REACHABILITY
                             | zorvinkel_protocol::ip::CAP_CORRELATION
@@ -338,6 +415,51 @@ impl DeviceSessionState {
                 None => ResponseBody::Error(RemoteError::Unsupported),
             }),
             _ => Ok(ResponseBody::Error(RemoteError::Unsupported)),
+        }
+    }
+}
+impl DeviceSessionState {
+    fn open_tunnel(
+        &mut self,
+        payload: &[u8],
+        actor: &ClientKey,
+        network: &mut impl NetworkStatusSource,
+        now: Duration,
+    ) -> ResponseBody {
+        use zorvinkel_application::tunnel::TunnelRefusal;
+        // Only Bluetooth carries tunnels; over IP the client reaches `sshd` directly.
+        let Some(control) = network.tunnel_control().filter(|_| !self.over_ip) else {
+            return ResponseBody::Error(RemoteError::Unsupported);
+        };
+        let Ok(request) = OpenRequest::parse(payload) else {
+            return ResponseBody::Error(RemoteError::Conflict);
+        };
+        // One tunnel per session as well: a client that wants another closes the first.
+        if self.granted_tunnel.is_some() {
+            return ResponseBody::Error(RemoteError::Busy);
+        }
+        if let Err(refusal) = control.admit() {
+            return ResponseBody::Error(match refusal {
+                TunnelRefusal::Unavailable => RemoteError::Unavailable,
+                TunnelRefusal::Busy => RemoteError::Busy,
+            });
+        }
+        let frame_length = request
+            .frame_length
+            .min(u16::try_from(self.tunnel_frame_limit).unwrap_or(u16::MAX));
+        if usize::from(frame_length) < MIN_FRAME {
+            return ResponseBody::Error(RemoteError::Unavailable);
+        }
+        let Some(permit) = claim_tunnel_slot(&self.tunnel_slot, actor) else {
+            return ResponseBody::Error(RemoteError::Busy);
+        };
+        let accepted = accept_tunnel(&request, frame_length, WINDOW_FRAMES, now, TUNNEL_LIFETIME);
+        match accepted {
+            Ok((cipher, response)) => {
+                self.granted_tunnel = Some(TunnelGrant { cipher, permit });
+                ResponseBody::TunnelOpened(response)
+            }
+            Err(_) => ResponseBody::Error(RemoteError::Conflict),
         }
     }
 }
@@ -443,10 +565,14 @@ fn dispatch_restart(
     let result = (|| {
         Ok(match operation {
             Operation::RestartPolicyRead => {
-                ResponseBody::RestartPolicy(match wifi.restart_state(actor)? {
+                let state = match wifi.restart_state(actor)? {
                     RestartState::LastAccepted => wire::RestartState::LastAccepted,
                     RestartState::DefaultWifi => wire::RestartState::DefaultWifi,
                     RestartState::DefaultAccessPoint => wire::RestartState::DefaultAccessPoint,
+                };
+                ResponseBody::RestartPolicy(wire::RestartReport {
+                    state,
+                    differs: wifi.restart_differs(actor),
                 })
             }
             Operation::RestartPolicySet => {
@@ -457,6 +583,7 @@ fn dispatch_restart(
                     match request.change {
                         wire::RestartChange::LastAccepted => RestartChange::LastAccepted,
                         wire::RestartChange::CurrentAsDefault => RestartChange::CurrentAsDefault,
+                        wire::RestartChange::Revert => RestartChange::Revert,
                     },
                 )?;
                 ResponseBody::RestartPolicyStarted(request.id)
@@ -608,6 +735,7 @@ fn response_matches(response: &ResponseBody, operation: Operation) -> bool {
             | (ResponseBody::Authenticated, Operation::Authenticate)
             | (ResponseBody::Status { .. }, Operation::Status)
             | (ResponseBody::Capabilities(_), Operation::Capabilities)
+            | (ResponseBody::TunnelOpened(_), Operation::TunnelOpen)
             | (ResponseBody::Correlation(_), Operation::CorrelationIssue)
             | (ResponseBody::Correlated, Operation::CorrelationRedeem)
             | (ResponseBody::WifiScanStarted(_), Operation::WifiScan)
@@ -641,6 +769,7 @@ type WeakSession = Weak<Mutex<DeviceSessionState>>;
 pub struct SessionRegistry {
     sessions: Arc<Mutex<Vec<WeakSession>>>,
     correlations: CorrelationBook,
+    tunnel_slot: Arc<TunnelSlot>,
 }
 
 impl SessionRegistry {
@@ -683,6 +812,13 @@ impl SessionRegistry {
 }
 impl zorvinkel_application::registration::SessionControl for SessionRegistry {
     fn terminate(&mut self, client: &ClientKey) -> Result<(), ApplicationError> {
+        // A revoked or blocked client loses its tunnel at once, not only at the next rekey.
+        if let Ok(owner) = self.tunnel_slot.0.lock()
+            && let Some((holder, cancelled)) = owner.as_ref()
+            && holder == client
+        {
+            cancelled.store(true, Ordering::Relaxed);
+        }
         let entries = self
             .sessions
             .lock()

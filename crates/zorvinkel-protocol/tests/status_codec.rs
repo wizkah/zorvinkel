@@ -727,7 +727,11 @@ fn restart_policy_messages_round_trip_and_reject_malformed_input() {
         |operation, payload: &[u8]| encode_request_payload(Request { id: 1, operation }, payload);
     assert!(request(Operation::RestartPolicyRead, &[]).is_ok());
     assert!(request(Operation::RestartPolicyRead, &[0]).is_err());
-    for change in [RestartChange::LastAccepted, RestartChange::CurrentAsDefault] {
+    for change in [
+        RestartChange::LastAccepted,
+        RestartChange::CurrentAsDefault,
+        RestartChange::Revert,
+    ] {
         let payload = set_payload(7, change).unwrap();
         let bytes = request(Operation::RestartPolicySet, &payload).unwrap();
         assert_eq!(
@@ -741,7 +745,7 @@ fn restart_policy_messages_round_trip_and_reject_malformed_input() {
     for invalid in [
         vec![],
         vec![0; 8],
-        vec![1, 0, 0, 0, 0, 0, 0, 0, 2],
+        vec![1, 0, 0, 0, 0, 0, 0, 0, 3],
         vec![0; 9],
     ] {
         assert!(read_set(&invalid).is_err(), "{invalid:?}");
@@ -751,9 +755,18 @@ fn restart_policy_messages_round_trip_and_reject_malformed_input() {
         );
     }
     for body in [
-        ResponseBody::RestartPolicy(RestartState::LastAccepted),
-        ResponseBody::RestartPolicy(RestartState::DefaultWifi),
-        ResponseBody::RestartPolicy(RestartState::DefaultAccessPoint),
+        ResponseBody::RestartPolicy(RestartReport {
+            state: RestartState::LastAccepted,
+            differs: false,
+        }),
+        ResponseBody::RestartPolicy(RestartReport {
+            state: RestartState::DefaultWifi,
+            differs: true,
+        }),
+        ResponseBody::RestartPolicy(RestartReport {
+            state: RestartState::DefaultAccessPoint,
+            differs: false,
+        }),
         ResponseBody::RestartPolicyStarted(9),
     ] {
         let response = Response { id: 1, body };
@@ -763,6 +776,9 @@ fn restart_policy_messages_round_trip_and_reject_malformed_input() {
         );
     }
     assert!(read_state(&[3]).is_err());
+    assert!(read_state(&[0, 2]).is_err());
+    assert!(!read_state(&[1]).unwrap().differs, "older form");
+    assert!(read_state(&[1, 1]).unwrap().differs);
     assert!(
         encode_request_payload(
             Request {

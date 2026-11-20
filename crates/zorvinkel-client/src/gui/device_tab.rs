@@ -1,4 +1,5 @@
 //! Content of a device tab: connection control, messages and the setup pages.
+use super::host_keys::HostKeyStore;
 use super::{
     i18n::{Language, Text},
     session::{ConnectionState, Page, Session},
@@ -36,7 +37,10 @@ pub fn state_label(ui: &mut egui::Ui, state: ConnectionState, lang: Language) {
 }
 
 impl Session {
-    pub fn show_tab(&mut self, ui: &mut egui::Ui, lang: Language) {
+    pub fn show_tab(&mut self, ui: &mut egui::Ui, lang: Language, host_keys: &mut HostKeyStore) {
+        if let Some(terminal) = &mut self.terminal {
+            terminal.poll(&self.handle, host_keys);
+        }
         self.header(ui, lang);
         if let Some(error) = self.error {
             ui.add_space(8.0);
@@ -46,18 +50,6 @@ impl Session {
                 theme::ERROR,
                 theme::ERROR_PALE,
             );
-        } else if let Some(seconds) = self.expiry_warning() {
-            ui.add_space(8.0);
-            theme::message(
-                ui,
-                &lang.format(Text::SessionEndsIn, &[&seconds]),
-                theme::AMBER,
-                theme::BLUE_PALE,
-            );
-            ui.add_space(4.0);
-            if self.active_action.is_none() && ui.button(lang.t(Text::RenewNow)).clicked() {
-                self.connect();
-            }
         } else if let Some(notice) = self.notice {
             ui.add_space(8.0);
             theme::message(ui, lang.t(notice.text()), theme::BLUE, theme::BLUE_PALE);
@@ -76,7 +68,7 @@ impl Session {
             });
             return;
         }
-        self.show_pages(ui, lang);
+        self.show_pages(ui, lang, host_keys);
     }
     fn header(&mut self, ui: &mut egui::Ui, lang: Language) {
         let state = self.state();
@@ -112,7 +104,7 @@ impl Session {
             }
         }
     }
-    fn show_pages(&mut self, ui: &mut egui::Ui, lang: Language) {
+    fn show_pages(&mut self, ui: &mut egui::Ui, lang: Language, host_keys: &mut HostKeyStore) {
         let wifi_offered =
             self.simulation || self.snapshot.wifi_available || self.snapshot.access_point_available;
         let system_offered = self.snapshot.system_info_available;
@@ -121,6 +113,7 @@ impl Session {
             || (!system_offered && self.page == Page::System)
             || (self.page == Page::Services && !groups.contains(&self.service_group))
             || (!self.snapshot.power_available && self.page == Page::Power)
+            || (!self.terminal_offered() && self.page == Page::Terminal)
         {
             self.page = if wifi_offered {
                 Page::Wifi
@@ -149,6 +142,9 @@ impl Session {
                 if self.snapshot.power_available {
                     ui.selectable_value(&mut self.page, Page::Power, lang.t(Text::PageDevice));
                 }
+                if self.terminal_offered() {
+                    ui.selectable_value(&mut self.page, Page::Terminal, lang.t(Text::PageTerminal));
+                }
             });
         });
         ui.add_space(8.0);
@@ -159,6 +155,7 @@ impl Session {
                 Page::System => self.system(ui, lang),
                 Page::Services => self.services(ui, lang),
                 Page::Power => self.power(ui, lang),
+                Page::Terminal => self.terminal_page(ui, lang, host_keys),
             }
         });
     }
@@ -199,21 +196,14 @@ impl Session {
                     ui.label(RichText::new(lang.t(function_label(function))).color(color));
                 });
                 if availability == Availability::NotOffered {
-                    ui.label(
-                        RichText::new(lang.t(Text::NotOfferedByDevice))
-                            .small()
-                            .color(theme::MUTED),
-                    );
+                    let hint = if function == Function::Terminal {
+                        Text::NoAddressYet
+                    } else {
+                        Text::NotOfferedByDevice
+                    };
+                    ui.label(RichText::new(lang.t(hint)).small().color(theme::MUTED));
                 }
             }
-        }
-        if self.is_connected() && !self.simulation {
-            ui.add_space(12.0);
-            ui.checkbox(
-                &mut self.auto_renew,
-                lang.t(Text::RenewSessionAutomatically),
-            )
-            .on_hover_text(lang.t(Text::RenewSessionHint));
         }
     }
 }
@@ -227,6 +217,7 @@ fn function_label(function: Function) -> Text {
         Function::Services => Text::FunctionServices,
         Function::ServiceActions => Text::FunctionServiceActions,
         Function::Power => Text::FunctionPower,
+        Function::Terminal => Text::FunctionTerminal,
     }
 }
 fn availability_style(availability: Availability) -> (&'static str, egui::Color32) {
@@ -292,8 +283,10 @@ mod tests {
     }
     fn render_in(session: &mut Session, lang: Language) {
         let context = egui::Context::default();
+        let mut host_keys = HostKeyStore::none();
         let _ = context.run(egui::RawInput::default(), |context| {
-            egui::CentralPanel::default().show(context, |ui| session.show_tab(ui, lang));
+            egui::CentralPanel::default()
+                .show(context, |ui| session.show_tab(ui, lang, &mut host_keys));
         });
     }
 

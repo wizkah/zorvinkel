@@ -5,8 +5,6 @@ use zorvinkel_application::{power::PowerAction, services::ServiceAction, setup::
 
 /// The session is renewed this long before the secure profile would end it.
 const RENEW_BEFORE: Duration = Duration::from_secs(45);
-/// From here on a session without automatic renewal shows a notice.
-const WARN_BEFORE: Duration = Duration::from_secs(120);
 
 /// A hint about the device, kept as an identifier so that it follows the language.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -39,6 +37,8 @@ pub enum Page {
     /// Services of the group named by `Session::service_group`.
     Services,
     Power,
+    /// Interactive SSH terminal; offered once the device reported a network address.
+    Terminal,
 }
 /// What the Wi-Fi page is about: joining another network or offering the device's own.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,13 +66,12 @@ impl Action {
     /// Discovery belongs to the device list, not to a device.
     fn for_request(request: &SetupRequest) -> Option<Self> {
         Some(match request {
-            SetupRequest::Discover => return None,
+            SetupRequest::Discover | SetupRequest::OpenTunnel => return None,
             SetupRequest::Connect(_) => Self::Connect,
             SetupRequest::Disconnect => Self::Disconnect,
             SetupRequest::Scan => Self::Scan,
             SetupRequest::ConnectWifi { .. } => Self::Wifi,
-            SetupRequest::ReadSavedCredentials { .. }
-            | SetupRequest::ReadCachedCredentials { .. } => Self::Credentials,
+            SetupRequest::ReadSavedCredentials { .. } => Self::Credentials,
             SetupRequest::SetWifiPersistence(_) => Self::Persistence,
             SetupRequest::PowerDevice(action) => Self::Power(*action),
             SetupRequest::ServiceAction { action, .. } => Self::Service(*action),
@@ -80,7 +79,7 @@ impl Action {
                 Self::AccessPoint
             }
             SetupRequest::UpdateAccessPoint(_) => Self::AccessPointSettings,
-            SetupRequest::RestartLastAccepted => Self::RestartLast,
+            SetupRequest::RestartLastAccepted | SetupRequest::RestartRevert => Self::RestartLast,
             SetupRequest::RestartCurrentAsDefault => Self::RestartDefault,
             SetupRequest::Refresh => Self::Refresh,
         })
@@ -143,6 +142,9 @@ pub struct Session {
     pub handle: String,
     pub name: String,
     pub in_range: bool,
+    /// What the latest search found the device over; both are off while it is out of range.
+    pub via_ble: bool,
+    pub via_ip: bool,
     pub tab_open: bool,
     pub simulation: bool,
     pub snapshot: SetupSnapshot,
@@ -166,8 +168,12 @@ pub struct Session {
     pub show_ap_password: bool,
     pub notice: Option<Notice>,
     pub error: Option<SetupError>,
-    /// Renews the secured session before it ends instead of letting the device disconnect.
-    pub auto_renew: bool,
+    /// Login, host key question or running terminal; dropped when the device is disconnected.
+    pub terminal: Option<super::terminal_page::TerminalPanel>,
+    /// Where the terminal's connector asks for streams of the Bluetooth tunnel.
+    pub tunnel_broker: std::sync::Arc<super::tunnel_broker::TunnelBroker>,
+    /// A tunnel request of the connector is queued or running at the worker.
+    pub tunnel_job: bool,
     outbox: Vec<SetupRequest>,
 }
 
@@ -177,6 +183,8 @@ impl Session {
             handle,
             name,
             in_range: true,
+            via_ble: true,
+            via_ip: false,
             tab_open: false,
             simulation,
             snapshot: SetupSnapshot::default(),
@@ -196,7 +204,9 @@ impl Session {
             show_ap_password: true,
             notice: None,
             error: None,
-            auto_renew: true,
+            terminal: None,
+            tunnel_broker: Default::default(),
+            tunnel_job: false,
             outbox: Vec::new(),
         }
     }
@@ -232,12 +242,12 @@ impl Session {
         self.submit(SetupRequest::Connect(self.handle.clone()));
     }
     pub fn disconnect(&mut self) {
+        self.terminal = None;
         self.submit(SetupRequest::Disconnect);
     }
     /// A connected device whose secured session is about to end and should be renewed now.
     pub fn needs_renewal(&self) -> bool {
-        self.auto_renew
-            && self.is_connected()
+        self.is_connected()
             && self.error.is_none()
             && self.active_action.is_none()
             && !self.refresh_pending
@@ -245,11 +255,6 @@ impl Session {
                 .snapshot
                 .session_remaining
                 .is_some_and(|left| left <= RENEW_BEFORE)
-    }
-    /// Seconds left when the session ends soon and nothing renews it.
-    pub fn expiry_warning(&self) -> Option<u64> {
-        let left = self.snapshot.session_remaining?;
-        (!self.auto_renew && self.is_connected() && left <= WARN_BEFORE).then_some(left.as_secs())
     }
     /// Text for the path the device is reached over.
     pub fn path_text(&self) -> Option<Text> {
@@ -265,6 +270,7 @@ impl Session {
     }
     /// Forgets the connection after the backend ended it, e.g. because another device took over.
     pub fn mark_disconnected(&mut self, reason: Notice) {
+        self.terminal = None;
         self.snapshot = SetupSnapshot::default();
         self.notice = Some(reason);
     }
@@ -406,19 +412,13 @@ mod tests {
         session
     }
     #[test]
-    fn a_session_is_renewed_shortly_before_it_ends_unless_the_user_opted_out() {
+    fn a_session_is_renewed_shortly_before_it_ends() {
         let mut session = connected_over(Transport::Ip, Some(Duration::from_secs(300)));
         assert!(!session.needs_renewal());
         session.snapshot.session_remaining = Some(RENEW_BEFORE);
         assert!(session.needs_renewal());
         session.refresh_pending = true;
         assert!(!session.needs_renewal());
-        session.refresh_pending = false;
-        session.auto_renew = false;
-        assert!(!session.needs_renewal());
-        assert_eq!(session.expiry_warning(), Some(RENEW_BEFORE.as_secs()));
-        session.snapshot.session_remaining = Some(Duration::from_secs(500));
-        assert_eq!(session.expiry_warning(), None);
     }
     #[test]
     fn the_connection_path_is_named_and_a_switch_to_bluetooth_is_announced() {
@@ -446,5 +446,80 @@ mod tests {
         session.submit(SetupRequest::PowerDevice(PowerAction::Restart));
         session.receive(Err(SetupError::Unavailable), false, false);
         assert_eq!(session.state(), ConnectionState::Failed);
+    }
+}
+
+#[cfg(test)]
+mod tunnel_tests {
+    use super::*;
+    use zorvinkel_adapters::simulation::setup::SimulatedSetup;
+    use zorvinkel_application::setup::SetupUpdate;
+
+    fn connected(tunnel: bool, transport: Option<Transport>) -> Session {
+        let mut session = Session::new("simulation:device-1".into(), "Fotobox".into(), false);
+        let mut update = SimulatedSetup::default()
+            .discovered()
+            .handle(SetupRequest::Connect(session.handle.clone()))
+            .unwrap();
+        update.snapshot.tunnel_available = tunnel;
+        update.snapshot.transport = transport;
+        update.snapshot.system_info = None;
+        session.receive(Ok(update), false, false);
+        session
+    }
+    fn update_with_stream(session: &Session) -> SetupUpdate {
+        let mut update = SimulatedSetup::default()
+            .discovered()
+            .handle(SetupRequest::Refresh)
+            .unwrap();
+        update.snapshot.tunnel = session.snapshot.tunnel.clone();
+        update.snapshot.tunnel.put(tokio::io::duplex(64).0);
+        update
+    }
+
+    #[test]
+    fn the_terminal_is_offered_through_the_tunnel_only_over_bluetooth() {
+        assert!(connected(true, Some(Transport::Ble)).terminal_offered());
+        assert!(!connected(true, Some(Transport::Ip)).terminal_offered());
+        assert!(!connected(false, Some(Transport::Ble)).terminal_offered());
+    }
+    #[test]
+    fn a_waiting_connector_makes_the_session_want_a_tunnel_once() {
+        let mut session = connected(true, Some(Transport::Ble));
+        assert!(!session.wants_tunnel());
+        let _answer = session.tunnel_broker.ask_for_test();
+        assert!(session.wants_tunnel());
+        session.tunnel_job = true;
+        assert!(!session.wants_tunnel(), "one job at a time");
+    }
+    #[test]
+    fn the_stream_of_a_finished_job_reaches_the_connector() {
+        let mut session = connected(true, Some(Transport::Ble));
+        let mut answer = session.tunnel_broker.ask_for_test();
+        session.tunnel_job = true;
+        let update = update_with_stream(&session);
+        session.finish_tunnel(Ok(update));
+        assert!(!session.tunnel_job);
+        assert!(matches!(answer.try_recv(), Ok(Ok(_))));
+    }
+    #[test]
+    fn refusals_and_failures_are_told_apart() {
+        use super::super::tunnel_broker::TunnelFailure;
+        for (result, expected) in [
+            (Some(SetupError::Busy), TunnelFailure::Busy),
+            (Some(SetupError::Unsupported), TunnelFailure::NotOffered),
+            (Some(SetupError::Unavailable), TunnelFailure::Unreachable),
+            (None, TunnelFailure::Unreachable),
+        ] {
+            let mut session = connected(true, Some(Transport::Ble));
+            let mut answer = session.tunnel_broker.ask_for_test();
+            let mut update = SimulatedSetup::default()
+                .discovered()
+                .handle(SetupRequest::Refresh)
+                .unwrap();
+            update.error = result;
+            session.finish_tunnel(Ok(update));
+            assert!(matches!(answer.try_recv(), Ok(Err(failure)) if failure == expected));
+        }
     }
 }

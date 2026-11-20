@@ -1,5 +1,7 @@
 mod device_tab;
 mod devices;
+mod easy_login;
+mod host_keys;
 mod hub;
 mod i18n;
 mod pages;
@@ -7,7 +9,12 @@ mod progress;
 mod services_page;
 mod session;
 mod system_page;
+mod terminal_colors;
+mod terminal_input;
+mod terminal_mouse;
+mod terminal_page;
 mod theme;
+mod tunnel_broker;
 #[cfg(target_os = "macos")]
 mod window_buttons;
 mod worker;
@@ -38,6 +45,7 @@ struct App {
     simulation: bool,
     language: Language,
     language_store: LanguageStore,
+    host_keys: host_keys::HostKeyStore,
     hub: Hub,
     sessions: Vec<Session>,
     view: View,
@@ -58,16 +66,21 @@ pub fn export_app_icon(path: &std::path::Path) -> Result<(), image::ImageError> 
 
 /// Simulated devices that can be connected side by side.
 pub fn run(device_count: usize) -> eframe::Result {
-    run_with(true, LanguageStore::none(), move |wake| {
-        Hub::parallel_connections(
-            SimulatedSetup::with_device_count(device_count),
-            Box::new(move || {
-                Box::new(SimulatedSetup::with_device_count(device_count).discovered())
-            }),
-            wake,
-            SIMULATION_DELAY,
-        )
-    })
+    run_with(
+        true,
+        LanguageStore::none(),
+        host_keys::HostKeyStore::none(),
+        move |wake| {
+            Hub::parallel_connections(
+                SimulatedSetup::with_device_count(device_count),
+                Box::new(move || {
+                    Box::new(SimulatedSetup::with_device_count(device_count).discovered())
+                }),
+                wake,
+                SIMULATION_DELAY,
+            )
+        },
+    )
 }
 
 /// A real backend holds one connection at a time.
@@ -79,6 +92,7 @@ pub fn run_backend(
     run_with(
         false,
         LanguageStore::in_directory(settings_directory),
+        host_keys::HostKeyStore::in_directory(settings_directory),
         move |wake| Hub::single_connection(backend, wake, std::time::Duration::ZERO),
     )
 }
@@ -86,6 +100,7 @@ pub fn run_backend(
 fn run_with(
     simulation: bool,
     store: LanguageStore,
+    host_keys: host_keys::HostKeyStore,
     hub: impl FnOnce(Box<dyn Fn() + Send + Sync>) -> Hub + 'static,
 ) -> eframe::Result {
     let icon = theme::app_icon().map_err(|error| eframe::Error::AppCreation(Box::new(error)))?;
@@ -118,6 +133,7 @@ fn run_with(
                 simulation,
                 language: store.load().unwrap_or_else(Language::detect),
                 language_store: store,
+                host_keys,
                 hub: hub(Box::new(move || context.request_repaint())),
                 sessions: Vec::new(),
                 view: View::Devices,
@@ -177,6 +193,14 @@ impl App {
             for request in session.take_outbox() {
                 self.hub.submit(owner.clone(), request, false);
             }
+            if session.wants_tunnel() {
+                session.tunnel_job = true;
+                self.hub.submit(
+                    Owner::Tunnel(session.handle.clone()),
+                    SetupRequest::OpenTunnel,
+                    true,
+                );
+            }
             let due = now - session.last_refresh > REFRESH_INTERVAL;
             if !self.simulation && session.needs_renewal() && self.hub.is_idle(&owner) {
                 // A new session over the same path; it runs unseen like a refresh.
@@ -205,6 +229,11 @@ impl App {
                 Owner::Device(handle) => {
                     self.finish_device_request(&handle, completed.background, completed.reply)
                 }
+                Owner::Tunnel(handle) => {
+                    if let Some(session) = self.session_mut(&handle) {
+                        session.finish_tunnel(completed.reply.result);
+                    }
+                }
             }
         }
     }
@@ -231,15 +260,21 @@ impl App {
     /// they are still connected.
     fn merge_devices(&mut self, found: Vec<zorvinkel_core::DiscoveredDevice>) {
         for session in &mut self.sessions {
-            session.in_range = found.iter().any(|d| d.handle == session.handle);
+            let device = found.iter().find(|d| d.handle == session.handle);
+            session.in_range = device.is_some();
+            session.via_ble = device.is_some_and(|d| d.via_ble);
+            session.via_ip = device.is_some_and(|d| d.via_ip);
         }
         for device in found {
             if let Some(session) = self.session_mut(&device.handle) {
                 session.name = device.display_name;
             } else {
                 let simulation = self.simulation;
-                self.sessions
-                    .push(Session::new(device.handle, device.display_name, simulation));
+                let (via_ble, via_ip) = (device.via_ble, device.via_ip);
+                let mut session = Session::new(device.handle, device.display_name, simulation);
+                session.via_ble = via_ble;
+                session.via_ip = via_ip;
+                self.sessions.push(session);
             }
         }
         self.sessions
@@ -525,10 +560,14 @@ impl eframe::App for App {
             .show(context, |ui| match self.view.clone() {
                 View::Devices => self.show_devices(ui),
                 View::Device(handle) => {
-                    if let Some(session) = self.session_mut(&handle) {
+                    let session = self
+                        .sessions
+                        .iter_mut()
+                        .find(|session| session.handle == handle);
+                    if let Some(session) = session {
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
-                            .show(ui, |ui| session.show_tab(ui, lang));
+                            .show(ui, |ui| session.show_tab(ui, lang, &mut self.host_keys));
                     }
                 }
             });
@@ -557,6 +596,7 @@ mod tests {
             simulation: true,
             language: Language::English,
             language_store: LanguageStore::none(),
+            host_keys: host_keys::HostKeyStore::none(),
             hub: Hub::parallel_connections(
                 SimulatedSetup::with_device_count(device_count),
                 Box::new(move || {
