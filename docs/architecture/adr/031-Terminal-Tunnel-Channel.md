@@ -1,6 +1,6 @@
 # ADR-031 – Terminal tunnel channel over Bluetooth
 
-**Status:** Proposed; partly implemented (see Consequences). Supplements ADR-030 (transport and open details).
+**Status:** Accepted; partly implemented (see Consequences). Supplements ADR-030 (transport and open details).
 
 ## Context
 

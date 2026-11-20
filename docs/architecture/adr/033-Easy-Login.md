@@ -1,6 +1,6 @@
 # ADR-033 – Easy login for the terminal
 
-**Status:** Proposed. Supplements ADR-032 (the session key may stay) and replaces the private key file option of ADR-030.
+**Status:** Accepted. Supplements ADR-032 (the session key may stay) and replaces the private key file option of ADR-030.
 
 ## Context
 

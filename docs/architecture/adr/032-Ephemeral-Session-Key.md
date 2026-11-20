@@ -1,6 +1,6 @@
 # ADR-032 – Ephemeral SSH session key for the terminal
 
-**Status:** Proposed. Supplements ADR-030 (authentication and reconnect). ADR-033 lets the key stay on the device and in the client's data directory when the user turns on easy login; "never written to disk" below then holds only while it is off.
+**Status:** Accepted. Supplements ADR-030 (authentication and reconnect). ADR-033 lets the key stay on the device and in the client's data directory when the user turns on easy login; "never written to disk" below then holds only while it is off.
 
 ## Context
 

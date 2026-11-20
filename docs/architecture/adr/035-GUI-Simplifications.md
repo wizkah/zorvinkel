@@ -1,6 +1,6 @@
 # ADR-035 – GUI simplifications: renewal, saved passwords, connection lamps
 
-**Status:** Proposed. Replaces in ADR-024 the per-device switch for session renewal and the "Renew now" hint. The restart choice is ADR-034, the terminal login ADR-033.
+**Status:** Accepted. Replaces in ADR-024 the per-device switch for session renewal and the "Renew now" hint. The restart choice is ADR-034, the terminal login ADR-033.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # ADR-034 – Revert and Persist
 
-**Status:** Proposed. Supplements ADR-025 (restart options): the device now reports whether the active configuration differs from the one that applies after a restart, and a change can switch back at once.
+**Status:** Accepted. Supplements ADR-025 (restart options): the device now reports whether the active configuration differs from the one that applies after a restart, and a change can switch back at once.
 
 ## Context
 
