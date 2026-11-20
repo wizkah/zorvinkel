@@ -7,7 +7,7 @@ use super::{
 };
 use eframe::egui::{self, RichText};
 
-const TILE: egui::Vec2 = egui::vec2(270.0, 124.0);
+const TILE: egui::Vec2 = egui::vec2(270.0, 172.0);
 const AVATAR: f32 = 56.0;
 const TILE_PADDING: f32 = 12.0;
 

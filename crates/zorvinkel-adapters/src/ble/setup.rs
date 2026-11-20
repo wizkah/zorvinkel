@@ -258,9 +258,9 @@ impl NativeSetup {
                             Some(read_persistence(&mut connection, None).await?);
                     }
                     self.snapshot.restart_policy = None;
+                    self.snapshot.restart_differs = false;
                     if bits & zorvinkel_protocol::restart::CAP_RESTART_POLICY != 0 {
-                        self.snapshot.restart_policy =
-                            Some(read_restart_policy(&mut connection).await?);
+                        read_restart_into(&mut connection, &mut self.snapshot).await?;
                     }
                     if let Some(advertised) = self.advertised_names.get(&handle) {
                         use zorvinkel_application::trust::DeviceTrustStore;
@@ -370,6 +370,9 @@ impl NativeSetup {
                             .await?;
                         }
                         self.snapshot.status = Some(read_status(connection).await?);
+                        if self.snapshot.restart_policy.is_some() {
+                            read_restart_into(connection, &mut self.snapshot).await?;
+                        }
                         if self.snapshot.system_info_available {
                             self.snapshot.system_info = read_system_info(connection).await?;
                         }
@@ -423,7 +426,9 @@ impl NativeSetup {
                         .await?;
                     }
                 }
-                SetupRequest::RestartLastAccepted | SetupRequest::RestartCurrentAsDefault => {
+                SetupRequest::RestartLastAccepted
+                | SetupRequest::RestartCurrentAsDefault
+                | SetupRequest::RestartRevert => {
                     if self.snapshot.restart_policy.is_none() {
                         return Err(WifiRequestFailure(SetupError::Unsupported).into());
                     }
@@ -442,6 +447,8 @@ impl NativeSetup {
                     }
                     let change = if matches!(request, SetupRequest::RestartLastAccepted) {
                         zorvinkel_protocol::restart::RestartChange::LastAccepted
+                    } else if matches!(request, SetupRequest::RestartRevert) {
+                        zorvinkel_protocol::restart::RestartChange::Revert
                     } else {
                         // A default needs something to fix; the device checks this again.
                         if matches!(
@@ -1003,6 +1010,7 @@ fn reset_device(snapshot: &mut SetupSnapshot) {
     snapshot.tunnel_available = false;
     snapshot.wifi_persistence = None;
     snapshot.restart_policy = None;
+    snapshot.restart_differs = false;
     snapshot.system_info_available = false;
     snapshot.system_info = None;
     snapshot.services_available = false;
@@ -1100,15 +1108,24 @@ async fn switch_access_point(
 
 /// The client only needs to know whether a default is set; the stored profile stays on the
 /// device, so the reference below is a placeholder for the discriminant.
+async fn read_restart_into(
+    connection: &mut StatusConnection,
+    snapshot: &mut SetupSnapshot,
+) -> BleResult<()> {
+    let (policy, differs) = read_restart_policy(connection).await?;
+    snapshot.restart_policy = Some(policy);
+    snapshot.restart_differs = differs;
+    Ok(())
+}
 async fn read_restart_policy(
     connection: &mut StatusConnection,
-) -> BleResult<zorvinkel_core::network::RestartPolicy> {
+) -> BleResult<(zorvinkel_core::network::RestartPolicy, bool)> {
     use zorvinkel_core::network::{NetworkConfiguration, ProfileId, RestartPolicy};
     use zorvinkel_protocol::restart::RestartState;
     match connection.request(Operation::RestartPolicyRead).await? {
-        ResponseBody::RestartPolicy(state) => {
+        ResponseBody::RestartPolicy(report) => {
             let reference = || ProfileId::new("device-default".into());
-            Ok(match state {
+            let policy = match report.state {
                 RestartState::LastAccepted => RestartPolicy::LastAccepted,
                 RestartState::DefaultWifi => RestartPolicy::DefaultProfile(
                     NetworkConfiguration::Wifi(reference().map_err(|_| "invalid profile")?),
@@ -1116,7 +1133,8 @@ async fn read_restart_policy(
                 RestartState::DefaultAccessPoint => RestartPolicy::DefaultProfile(
                     NetworkConfiguration::AccessPoint(reference().map_err(|_| "invalid profile")?),
                 ),
-            })
+            };
+            Ok((policy, report.differs))
         }
         ResponseBody::Error(error) => Err(WifiRequestFailure(wifi_remote_error(error)).into()),
         _ => Err("invalid restart option response".into()),
@@ -1158,8 +1176,7 @@ async fn change_restart_policy(
             }
             _ => error,
         })?;
-    snapshot.restart_policy = Some(read_restart_policy(connection).await?);
-    Ok(())
+    read_restart_into(connection, snapshot).await
 }
 
 async fn read_persistence(
@@ -1269,6 +1286,9 @@ async fn finish_wifi(
                     _ => return Err(WifiRequestFailure(SetupError::Unavailable).into()),
                 }
                 snapshot.status = Some(read_status(connection).await?);
+                if snapshot.restart_policy.is_some() {
+                    read_restart_into(connection, snapshot).await?;
+                }
                 return Ok(());
             }
             ResponseBody::Error(error) => {

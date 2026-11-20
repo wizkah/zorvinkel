@@ -90,6 +90,43 @@ fn reconnect_reads_actual_network_and_restart_configuration() {
 }
 
 #[test]
+fn a_change_differs_from_the_persisted_state_until_persisted_or_reverted() {
+    let mut backend = connected();
+    assert!(
+        !backend
+            .handle(SetupRequest::Refresh)
+            .unwrap()
+            .snapshot
+            .restart_differs
+    );
+    let changed = wifi(&mut backend, DEMO_WIFI_PASSWORD);
+    assert!(
+        changed.snapshot.restart_differs,
+        "volatile after the change"
+    );
+
+    let reverted = backend.handle(SetupRequest::RestartRevert).unwrap();
+    assert!(reverted.error.is_none());
+    assert!(!reverted.snapshot.restart_differs);
+    assert_eq!(
+        reverted.snapshot.status.unwrap().network,
+        NetworkStatus::Disconnected,
+        "back at once to the persisted configuration"
+    );
+
+    wifi(&mut backend, DEMO_WIFI_PASSWORD);
+    let persisted = backend
+        .handle(SetupRequest::RestartCurrentAsDefault)
+        .unwrap();
+    assert!(!persisted.snapshot.restart_differs);
+    let again = backend.handle(SetupRequest::RestartRevert).unwrap();
+    assert!(matches!(
+        again.snapshot.status.unwrap().network,
+        NetworkStatus::WifiConnected { .. }
+    ));
+}
+
+#[test]
 fn access_point_data_comes_from_the_device_and_updates_while_active() {
     let mut backend = connected();
     let proposed = backend.handle(SetupRequest::Refresh).unwrap().snapshot;

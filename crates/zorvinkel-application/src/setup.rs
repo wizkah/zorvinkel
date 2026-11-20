@@ -113,6 +113,8 @@ pub enum SetupRequest {
     UpdateAccessPoint(AccessPointSettings),
     RestartLastAccepted,
     RestartCurrentAsDefault,
+    /// Switches at once back to the configuration that applies after a restart.
+    RestartRevert,
     /// Reads the password for this network on explicit request: the client system's store
     /// first, then the one Zorvinkel remembered after a successful connection.
     ReadSavedCredentials {
@@ -171,6 +173,8 @@ pub struct SetupSnapshot {
     /// `access_point` is a proposal that the device has not stored yet.
     pub access_point_proposed: bool,
     pub restart_policy: Option<RestartPolicy>,
+    /// The configuration active now is not the one that applies after a restart.
+    pub restart_differs: bool,
     /// How the connected device is reached; `None` while disconnected or simulated.
     pub transport: Option<Transport>,
     /// The device offers the terminal tunnel (capability); usable over Bluetooth only.

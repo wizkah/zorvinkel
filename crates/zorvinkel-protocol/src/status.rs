@@ -101,7 +101,7 @@ pub enum ResponseBody {
     ServiceActionAccepted(crate::services::ServiceAction, String),
     Correlation(crate::ip::CorrelationToken),
     Correlated,
-    RestartPolicy(crate::restart::RestartState),
+    RestartPolicy(crate::restart::RestartReport),
     RestartPolicyStarted(u64),
     TunnelOpened(crate::tunnel::OpenResponse),
     Error(RemoteError),
@@ -222,7 +222,7 @@ pub fn encode_response(response: &Response) -> Result<Vec<u8>, CodecError> {
         }
         ResponseBody::Correlation(token) => (0x8010, token.0.to_vec()),
         ResponseBody::Correlated => (0x8011, Vec::new()),
-        ResponseBody::RestartPolicy(state) => (0x8012, crate::restart::state_payload(*state)),
+        ResponseBody::RestartPolicy(report) => (0x8012, crate::restart::state_payload(*report)),
         ResponseBody::RestartPolicyStarted(id) => (0x8013, crate::wifi::id_payload(*id)?),
         ResponseBody::TunnelOpened(response) => (0x8014, response.to_bytes()),
         ResponseBody::Error(error) => (

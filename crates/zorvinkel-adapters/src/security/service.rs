@@ -565,10 +565,14 @@ fn dispatch_restart(
     let result = (|| {
         Ok(match operation {
             Operation::RestartPolicyRead => {
-                ResponseBody::RestartPolicy(match wifi.restart_state(actor)? {
+                let state = match wifi.restart_state(actor)? {
                     RestartState::LastAccepted => wire::RestartState::LastAccepted,
                     RestartState::DefaultWifi => wire::RestartState::DefaultWifi,
                     RestartState::DefaultAccessPoint => wire::RestartState::DefaultAccessPoint,
+                };
+                ResponseBody::RestartPolicy(wire::RestartReport {
+                    state,
+                    differs: wifi.restart_differs(actor),
                 })
             }
             Operation::RestartPolicySet => {
@@ -579,6 +583,7 @@ fn dispatch_restart(
                     match request.change {
                         wire::RestartChange::LastAccepted => RestartChange::LastAccepted,
                         wire::RestartChange::CurrentAsDefault => RestartChange::CurrentAsDefault,
+                        wire::RestartChange::Revert => RestartChange::Revert,
                     },
                 )?;
                 ResponseBody::RestartPolicyStarted(request.id)

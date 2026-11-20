@@ -4,7 +4,7 @@ use super::{
     session::{Session, WifiMode},
     theme,
 };
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32};
 use zorvinkel_adapters::simulation::setup::DEMO_WIFI_PASSWORD;
 use zorvinkel_application::{power::PowerAction, setup::*};
 
@@ -102,72 +102,34 @@ impl Session {
             });
         }
     }
-    /// The one place for what the device does after a restart: once a connection works, the
-    /// user keeps it ("persist") or lets the device go back to its earlier settings ("revert").
+    /// Revert / Persist: offered while the device runs a configuration that is not the one it
+    /// would come back with after a restart. Revert switches back to the persisted one at once;
+    /// Persist makes the running one the persisted one.
     fn restart_choice(&mut self, ui: &mut egui::Ui, lang: Language) {
-        use zorvinkel_core::network::RestartPolicy;
-        let persistence = self.snapshot.wifi_persistence;
-        if persistence.is_none() && self.snapshot.restart_policy.is_none() {
-            return;
-        }
-        let persisted = matches!(
-            self.snapshot.restart_policy,
-            Some(RestartPolicy::DefaultProfile(_))
-        ) || persistence == Some(true);
-        let has_network = !matches!(
-            self.snapshot.status.as_ref().map(|status| &status.network),
-            None | Some(zorvinkel_core::NetworkStatus::Disconnected)
-        );
-        // Only offered once there is something that works; a setting already kept stays
-        // reversible even when the connection is gone.
-        if !has_network && !persisted {
+        if !self.snapshot.restart_differs {
             return;
         }
         ui.add_space(8.0);
-        ui.separator();
-        ui.label(RichText::new(lang.t(Text::AfterRestart)).strong());
-        ui.label(lang.t(Text::RestartPrompt));
-        ui.add_space(4.0);
         let mut request = None;
         ui.horizontal(|ui| {
             let idle = self.active_action.is_none();
             if ui
-                .add_enabled(
-                    idle && persisted,
-                    egui::Button::new(lang.t(Text::RestartRevert)),
-                )
+                .add_enabled(idle, egui::Button::new(lang.t(Text::RestartRevert)))
+                .on_hover_text(lang.t(Text::RestartHintOriginal))
                 .clicked()
             {
-                request = Some(if persistence.is_some() {
-                    SetupRequest::SetWifiPersistence(false)
-                } else {
-                    SetupRequest::RestartLastAccepted
-                });
+                request = Some(SetupRequest::RestartRevert);
             }
             if ui
-                .add_enabled(
-                    idle && !persisted,
-                    theme::primary_button(lang.t(Text::RestartPersist)),
-                )
+                .add_enabled(idle, theme::primary_button(lang.t(Text::RestartPersist)))
+                .on_hover_text(lang.t(Text::RestartHintKeep))
                 .clicked()
             {
-                request = Some(if persistence.is_some() {
-                    SetupRequest::SetWifiPersistence(true)
-                } else {
-                    SetupRequest::RestartCurrentAsDefault
-                });
+                request = Some(SetupRequest::RestartCurrentAsDefault);
             }
         });
-        ui.small(lang.t(if persisted {
-            Text::RestartHintKeep
-        } else {
-            Text::RestartHintOriginal
-        }));
         if let Some(request) = request {
             self.submit(request);
-        }
-        if self.simulation {
-            ui.small(lang.t(Text::RestartSimulationHint));
         }
     }
     fn access_point(&mut self, ui: &mut egui::Ui, lang: Language) {

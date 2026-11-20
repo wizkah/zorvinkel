@@ -79,7 +79,7 @@ impl Action {
                 Self::AccessPoint
             }
             SetupRequest::UpdateAccessPoint(_) => Self::AccessPointSettings,
-            SetupRequest::RestartLastAccepted => Self::RestartLast,
+            SetupRequest::RestartLastAccepted | SetupRequest::RestartRevert => Self::RestartLast,
             SetupRequest::RestartCurrentAsDefault => Self::RestartDefault,
             SetupRequest::Refresh => Self::Refresh,
         })

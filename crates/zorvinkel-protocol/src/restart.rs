@@ -32,14 +32,27 @@ impl RestartState {
         }
     }
 }
-pub fn state_payload(state: RestartState) -> Vec<u8> {
-    vec![state.code()]
+/// What the device reports: the option, and whether the configuration active now differs from
+/// the one that applies after a restart (a change that was not persisted).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestartReport {
+    pub state: RestartState,
+    pub differs: bool,
 }
-pub fn read_state(payload: &[u8]) -> Result<RestartState, CodecError> {
-    match payload {
-        [code] => RestartState::from_code(*code),
-        _ => Err(CodecError::Malformed),
-    }
+pub fn state_payload(report: RestartReport) -> Vec<u8> {
+    vec![report.state.code(), u8::from(report.differs)]
+}
+/// One byte is the older form without the comparison.
+pub fn read_state(payload: &[u8]) -> Result<RestartReport, CodecError> {
+    let (code, differs) = match payload {
+        [code] | [code, 0] => (*code, false),
+        [code, 1] => (*code, true),
+        _ => return Err(CodecError::Malformed),
+    };
+    Ok(RestartReport {
+        state: RestartState::from_code(code)?,
+        differs,
+    })
 }
 
 /// The change a client asks for.
@@ -49,6 +62,8 @@ pub enum RestartChange {
     LastAccepted,
     /// Make the configuration that is active now the default for every restart.
     CurrentAsDefault,
+    /// Switch at once back to the configuration that applies after a restart.
+    Revert,
 }
 pub struct RestartRequest {
     pub id: u64,
@@ -59,6 +74,7 @@ pub fn set_payload(id: u64, change: RestartChange) -> Result<Vec<u8>, CodecError
     bytes.push(match change {
         RestartChange::LastAccepted => 0,
         RestartChange::CurrentAsDefault => 1,
+        RestartChange::Revert => 2,
     });
     Ok(bytes)
 }
@@ -69,6 +85,7 @@ pub fn read_set(payload: &[u8]) -> Result<RestartRequest, CodecError> {
     let change = match payload[8] {
         0 => RestartChange::LastAccepted,
         1 => RestartChange::CurrentAsDefault,
+        2 => RestartChange::Revert,
         _ => return Err(CodecError::Malformed),
     };
     Ok(RestartRequest {

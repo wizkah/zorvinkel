@@ -22,6 +22,8 @@ pub struct SimulatedSetup {
     discovered: bool,
     scanned: bool,
     wifi_persistence: bool,
+    /// What the simulated device applies after a restart; a change is volatile until it matches.
+    persisted: NetworkConfiguration,
     /// What the simulated device stored; `None` makes the setup propose defaults.
     access_point: Option<AccessPointSettings>,
     next_operation: u64,
@@ -71,6 +73,7 @@ impl SimulatedSetup {
             discovered: false,
             scanned: false,
             wifi_persistence: false,
+            persisted: NetworkConfiguration::Disconnected,
             access_point: None,
             next_operation: 1,
             services: simulated_services(),
@@ -163,12 +166,17 @@ impl SimulatedSetup {
                 if self.network.configuration == NetworkConfiguration::Disconnected {
                     return Err(SetupError::NoActiveNetwork);
                 }
+                self.persisted = self.network.configuration.clone();
                 set_restart_policy(
                     &mut self.store,
                     &Self::actor(),
                     RestartPolicy::DefaultProfile(self.network.configuration.clone()),
                 )
                 .map_err(|_| SetupError::Unavailable)
+            }
+            SetupRequest::RestartRevert => {
+                self.network.configuration = self.persisted.clone();
+                Ok(())
             }
             SetupRequest::SetWifiPersistence(enabled) => {
                 self.wifi_persistence = enabled;
@@ -215,6 +223,14 @@ impl SimulatedSetup {
         )
         .map_err(|_| SetupError::Unavailable)?;
         if matches!(operation.status, OperationStatus::Succeeded { .. }) {
+            // With persistence on and no fixed default, a successful change is kept.
+            let following = self.wifi_persistence
+                && self.store.read().is_ok_and(|state| {
+                    state.settings.restart_policy == RestartPolicy::LastAccepted
+                });
+            if following {
+                self.persisted = self.network.configuration.clone();
+            }
             Ok(())
         } else {
             Err(SetupError::ConnectionRejected)
@@ -293,6 +309,7 @@ impl SimulatedSetup {
                     .settings
                     .restart_policy,
             ),
+            restart_differs: self.network.configuration != self.persisted,
             transport: None,
             session_remaining: None,
         })

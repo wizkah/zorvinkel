@@ -332,24 +332,15 @@ texts! {
     HidePassword { en: "Hide password", de: "Passwort verbergen" },
 
     // Restart choice
-    AfterRestart { en: "After the device restarts", de: "Nach einem Neustart des Geräts" },
-    RestartPrompt {
-        en: "The connection works. Choose what the device does after a restart.",
-        de: "Die Verbindung funktioniert. Wähle, was das Gerät nach einem Neustart tut.",
-    },
     RestartRevert { en: "Revert", de: "Zurücksetzen" },
     RestartPersist { en: "Persist", de: "Beibehalten" },
     RestartHintOriginal {
-        en: "Revert: after a restart the device returns to its earlier settings. The device also reverts changes if the app does not report back within a minute.",
-        de: "Zurücksetzen: Nach einem Neustart kehrt das Gerät zu seinen früheren Einstellungen zurück. Änderungen nimmt das Gerät außerdem zurück, wenn sich die App nicht binnen einer Minute wieder meldet.",
+        en: "Switch back to the persisted configuration now.",
+        de: "Jetzt auf die gespeicherte Konfiguration zurückschalten.",
     },
     RestartHintKeep {
-        en: "Persist: the current setting stays after a restart.",
-        de: "Beibehalten: Die aktuelle Einstellung bleibt nach einem Neustart erhalten.",
-    },
-    RestartSimulationHint {
-        en: "The choice is saved on the simulated device. All settings are discarded when the demo ends.",
-        de: "Die Auswahl wird am simulierten Gerät gespeichert. Beim Beenden der Demo werden alle Einstellungen verworfen.",
+        en: "Keep the running configuration after a restart.",
+        de: "Die laufende Konfiguration nach einem Neustart beibehalten.",
     },
 
     // Device Wi-Fi
