@@ -24,6 +24,8 @@ pub(crate) enum Secret {
 pub struct Credentials {
     user: String,
     secret: Arc<Secret>,
+    /// The key is the one easy login left on the device (ADR-033).
+    stored: bool,
 }
 impl Credentials {
     pub fn password(user: &str, password: String) -> Result<Self, InvalidCredentials> {
@@ -46,12 +48,28 @@ impl Credentials {
         let key = decode_secret_key(key_text, passphrase).map_err(|_| InvalidCredentials::Key)?;
         Ok(Self::from_secret(user, Secret::Key(Arc::new(key))))
     }
+    /// The key of an earlier easy login; `key_text` is OpenSSH text without a passphrase.
+    pub fn stored_key(user: &str, key_text: &str) -> Result<Self, InvalidCredentials> {
+        let mut credentials = Self::private_key(user, key_text, None)?;
+        credentials.stored = true;
+        Ok(credentials)
+    }
     pub fn user(&self) -> &str {
         &self.user
+    }
+    /// Logs in with the key of an earlier easy login.
+    pub fn uses_stored_key(&self) -> bool {
+        self.stored
     }
     /// The ephemeral key that replaces a password after the first login (ADR-032).
     pub(crate) fn session_key(&self, key: PrivateKey) -> Self {
         Self::from_secret(self.user.clone(), Secret::Key(Arc::new(key)))
+    }
+    pub(crate) fn key(&self) -> Option<&PrivateKey> {
+        match &*self.secret {
+            Secret::Key(key) => Some(&**key),
+            Secret::Password(_) => None,
+        }
     }
     pub(crate) fn is_password(&self) -> bool {
         matches!(*self.secret, Secret::Password(_))
@@ -63,6 +81,7 @@ impl Credentials {
         Self {
             user,
             secret: Arc::new(secret),
+            stored: false,
         }
     }
 }

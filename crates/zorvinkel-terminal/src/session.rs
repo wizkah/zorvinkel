@@ -1,4 +1,6 @@
-use crate::{Connector, Credentials, TerminalSize, credentials::Secret, deposit::SessionKey};
+use crate::{
+    Connector, Credentials, KeyControl, TerminalSize, credentials::Secret, deposit::SessionKey,
+};
 use russh::{
     ChannelMsg, Disconnect,
     client::{self, Handle},
@@ -141,6 +143,7 @@ pub struct SshConnector {
     verifier: Arc<dyn HostKeyVerifier>,
     /// Set once a session key has been deposited on the device and not yet removed.
     deposited: Option<SessionKey>,
+    control: KeyControl,
 }
 impl SshConnector {
     /// `address` is `host:port`.
@@ -149,13 +152,7 @@ impl SshConnector {
         credentials: Credentials,
         verifier: Arc<dyn HostKeyVerifier>,
     ) -> Self {
-        Self {
-            address: address.into(),
-            dialer: None,
-            credentials,
-            verifier,
-            deposited: None,
-        }
+        Self::build(address.into(), None, credentials, verifier)
     }
     /// Connects over streams the `dialer` opens instead of a TCP connection.
     pub fn with_dialer(
@@ -163,13 +160,38 @@ impl SshConnector {
         credentials: Credentials,
         verifier: Arc<dyn HostKeyVerifier>,
     ) -> Self {
+        Self::build(String::new(), Some(dialer), credentials, verifier)
+    }
+    fn build(
+        address: String,
+        dialer: Option<Arc<dyn Dialer>>,
+        credentials: Credentials,
+        verifier: Arc<dyn HostKeyVerifier>,
+    ) -> Self {
+        let control = KeyControl::default();
+        // The key of an earlier easy login is already on the device: it stays unless the caller
+        // turns easy login off.
+        let deposited = credentials
+            .uses_stored_key()
+            .then(|| credentials.key().cloned())
+            .flatten()
+            .and_then(|key| {
+                control.set_key(key.clone());
+                control.keep(true);
+                SessionKey::from_private(key)
+            });
         Self {
-            address: String::new(),
-            dialer: Some(dialer),
+            address,
+            dialer,
             credentials,
             verifier,
-            deposited: None,
+            deposited,
+            control,
         }
+    }
+    /// Lets the caller keep the session key on the device (easy login) and fetch it for storage.
+    pub fn key_control(&self) -> KeyControl {
+        self.control.clone()
     }
     async fn establish(&mut self, size: TerminalSize) -> Result<TerminalSession, ConnectError> {
         let handle = self.authenticated_handle().await?;
@@ -203,10 +225,14 @@ impl SshConnector {
             _ => return Err(refused()),
         }
         self.credentials = self.credentials.session_key(key.private.clone());
+        self.control.set_key(key.private.clone());
         self.deposited = Some(key);
         Ok(())
     }
     async fn remove_session_key(&mut self) {
+        if self.control.is_kept() {
+            return;
+        }
         let Some(key) = self.deposited.take() else {
             return;
         };

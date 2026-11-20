@@ -32,6 +32,8 @@ impl Default for SimulatedSetup {
         Self::with_devices(vec![DiscoveredDevice {
             handle: "simulation:device-1".into(),
             display_name: "Photo booth · Demo".into(),
+            via_ble: true,
+            via_ip: true,
         }])
     }
 }
@@ -43,6 +45,9 @@ impl SimulatedSetup {
                 .map(|number| DiscoveredDevice {
                     handle: format!("simulation:device-{number}"),
                     display_name: format!("Photo booth {number:02}"),
+                    // Varied so that all tile states show up in the demo.
+                    via_ble: number % 3 != 0,
+                    via_ip: number % 2 == 0 || number % 3 == 0,
                 })
                 .collect(),
         )
@@ -190,8 +195,7 @@ impl SimulatedSetup {
                 self.scanned = false;
                 Ok(())
             }
-            SetupRequest::ReadSavedCredentials { .. }
-            | SetupRequest::ReadCachedCredentials { .. } => Err(SetupError::CredentialsUnavailable),
+            SetupRequest::ReadSavedCredentials { .. } => Err(SetupError::CredentialsUnavailable),
             _ => unreachable!("connection commands were handled before authorization"),
         }
     }

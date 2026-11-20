@@ -1,7 +1,44 @@
-//! Ephemeral session key (ADR-032): the password is used once; reconnects use a key that exists
-//! in client memory only and whose public half is removed again when the terminal ends.
-use russh::keys::{Algorithm, PrivateKey};
-use std::time::{SystemTime, UNIX_EPOCH};
+//! Session key (ADR-032, ADR-033): the password is used once; reconnects use a key that lives in
+//! client memory. Its public half is removed again when the terminal ends, unless easy login
+//! keeps it on the device.
+use russh::keys::{Algorithm, PrivateKey, ssh_key::LineEnding};
+use std::{
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
+use zeroize::Zeroizing;
+
+/// Shared between the connector and the caller: whether the session key stays on the device
+/// after the terminal ends ("easy login"), and the key itself so the caller can store it.
+#[derive(Clone, Default)]
+pub struct KeyControl(Arc<Mutex<KeyState>>);
+#[derive(Default)]
+struct KeyState {
+    keep: bool,
+    private: Option<PrivateKey>,
+}
+impl KeyControl {
+    /// `true`: the entry on the device stays when the terminal ends. `false`: it is removed.
+    pub fn keep(&self, keep: bool) {
+        if let Ok(mut state) = self.0.lock() {
+            state.keep = keep;
+        }
+    }
+    pub fn is_kept(&self) -> bool {
+        self.0.lock().is_ok_and(|state| state.keep)
+    }
+    /// The private key that carries the terminal, in OpenSSH format; `None` until the key
+    /// exists (after the first login).
+    pub fn private_key(&self) -> Option<Zeroizing<String>> {
+        let state = self.0.lock().ok()?;
+        state.private.as_ref()?.to_openssh(LineEnding::LF).ok()
+    }
+    pub(crate) fn set_key(&self, key: PrivateKey) {
+        if let Ok(mut state) = self.0.lock() {
+            state.private = Some(key);
+        }
+    }
+}
 
 pub(crate) struct SessionKey {
     pub(crate) private: PrivateKey,
@@ -11,7 +48,10 @@ pub(crate) struct SessionKey {
 }
 impl SessionKey {
     pub(crate) fn generate() -> Option<Self> {
-        let private = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).ok()?;
+        Self::from_private(PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).ok()?)
+    }
+    /// Wraps a key that is already on the device (easy login), so it can be removed again.
+    pub(crate) fn from_private(private: PrivateKey) -> Option<Self> {
         let line = private.public_key().to_openssh().ok()?;
         let blob = line.split_whitespace().nth(1)?.to_owned();
         // The line comes from our own encoder; the check keeps shell quoting trivially safe.

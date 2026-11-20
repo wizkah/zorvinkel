@@ -11,6 +11,7 @@ mod screen;
 mod session;
 
 pub use credentials::{Credentials, InvalidCredentials};
+pub use deposit::KeyControl;
 pub use resume::{ConnectionStatus, Connector, ResumableEvent, ResumableTerminal, RetryPolicy};
 pub use screen::{Screen, TerminalSize};
 pub use session::{

@@ -1,6 +1,7 @@
 //! The terminal page: login, host key question and the embedded terminal (ADR-030, ADR-032).
 use super::terminal_mouse::{self, MouseEvent, Selection};
 use super::{
+    easy_login::EasyLogin,
     host_keys::{HostKeyStore, Trust},
     i18n::{Language, Text},
     terminal_colors as colors, terminal_input, theme,
@@ -16,8 +17,8 @@ use tokio::{runtime::Runtime, time::timeout};
 use zeroize::Zeroizing;
 use zorvinkel_terminal::vt100::MouseProtocolMode;
 use zorvinkel_terminal::{
-    ConnectError, ConnectionStatus, Credentials, ResumableEvent, ResumableTerminal, RetryPolicy,
-    Screen, SshConnector, TerminalSize,
+    ConnectError, ConnectionStatus, Credentials, KeyControl, ResumableEvent, ResumableTerminal,
+    RetryPolicy, Screen, SshConnector, TerminalSize,
 };
 
 /// How the terminal reaches `sshd`: over the network, or through the Bluetooth tunnel.
@@ -76,6 +77,17 @@ struct Running {
     dragged_over: Option<(u16, u16)>,
     /// Part of a wheel step that did not fill a whole line yet.
     wheel_rest: f32,
+    user: String,
+    /// The login succeeded once; the terminal is shown from then on (ADR-033).
+    ever_connected: bool,
+    /// The login used the key of an earlier easy login.
+    used_stored_key: bool,
+    /// Shared with the connector: keeps the session key on the device and hands it out.
+    control: KeyControl,
+    /// Easy login is on: the key stays on the device and in the client's data directory.
+    easy: bool,
+    /// Turning easy login on failed because the key could not be stored.
+    easy_not_saved: bool,
 }
 impl Drop for Running {
     /// Gives the cleanup on the device a moment: the session key is removed once the terminal
@@ -107,10 +119,7 @@ enum Stage {
 pub struct TerminalPanel {
     stage: Stage,
     user: String,
-    /// Doubles as the passphrase when a key file is given.
     password: Zeroizing<String>,
-    /// Path of a private key file; empty means password login.
-    key_file: String,
     notice: Option<Text>,
 }
 impl Default for TerminalPanel {
@@ -119,7 +128,6 @@ impl Default for TerminalPanel {
             stage: Stage::Login,
             user: String::new(),
             password: Zeroizing::new(String::new()),
-            key_file: String::new(),
             notice: None,
         }
     }
@@ -150,7 +158,10 @@ impl TerminalPanel {
         }
         match next {
             Some(Next::Ended(ending)) => self.stage = Stage::Ended(ending),
-            Some(Next::Login(notice)) => {
+            Some(Next::Login(notice, forget_easy_login)) => {
+                if forget_easy_login {
+                    store.easy.forget(device);
+                }
                 self.notice = Some(notice);
                 self.stage = Stage::Login;
             }
@@ -174,7 +185,7 @@ impl TerminalPanel {
             Stage::Login => self.show_login(ui, lang, device, route, store),
             Stage::HostKey(_) => self.show_host_key(ui, lang, device, store),
             Stage::Ended(_) => self.show_ended(ui, lang),
-            Stage::Running(_) => self.show_running(ui, lang),
+            Stage::Running(_) => self.show_running(ui, lang, device, store),
         }
     }
 
@@ -196,6 +207,12 @@ impl TerminalPanel {
             ui.label(lang.t(Text::TerminalNoAddress));
             return;
         };
+        let easy = store.easy.load(device);
+        if self.user.is_empty()
+            && let Some(easy) = &easy
+        {
+            self.user.clone_from(&easy.user);
+        }
         egui::Grid::new("terminal_login")
             .num_columns(2)
             .spacing([12.0, 8.0])
@@ -206,36 +223,36 @@ impl TerminalPanel {
                 ui.label(lang.t(Text::TerminalPassword));
                 ui.add(egui::TextEdit::singleline(&mut *self.password).password(true));
                 ui.end_row();
-                ui.label(lang.t(Text::TerminalKeyFile));
-                ui.text_edit_singleline(&mut self.key_file)
-                    .on_hover_text(lang.t(Text::TerminalKeyFileHint));
-                ui.end_row();
             });
+        if easy
+            .as_ref()
+            .is_some_and(|easy| easy.user == self.user.trim())
+        {
+            ui.add_space(4.0);
+            ui.small(lang.t(Text::TerminalEasyLoginActive));
+        }
         ui.add_space(8.0);
         let ready = !self.user.trim().is_empty();
         let open = ui.add_enabled(ready, theme::primary_button(lang.t(Text::TerminalOpen)));
         if open.clicked() {
-            match self.credentials_from_form() {
+            match self.credentials_from_form(easy.as_ref()) {
                 Ok(credentials) => self.start(ui.ctx(), device, route, credentials, store),
                 Err(notice) => self.notice = Some(notice),
             }
         }
     }
 
-    /// Takes the secret out of the form: it is not kept after the click.
-    fn credentials_from_form(&mut self) -> Result<Credentials, Text> {
+    /// Takes the secret out of the form: it is not kept after the click. An empty password
+    /// uses the key of an earlier easy login for that user.
+    fn credentials_from_form(&mut self, easy: Option<&EasyLogin>) -> Result<Credentials, Text> {
         let secret = Zeroizing::new(std::mem::take(&mut *self.password));
         let user = self.user.trim();
-        let path = self.key_file.trim();
-        if path.is_empty() {
-            return Credentials::password(user, secret.to_string())
-                .map_err(|_| Text::TerminalLoginFailed);
+        if secret.is_empty()
+            && let Some(easy) = easy.filter(|easy| easy.user == user)
+        {
+            return Credentials::stored_key(user, &easy.key).map_err(|_| Text::TerminalLoginFailed);
         }
-        let key_text = std::fs::read_to_string(path)
-            .map(Zeroizing::new)
-            .map_err(|_| Text::TerminalKeyUnreadable)?;
-        let passphrase = (!secret.is_empty()).then_some(secret.as_str());
-        Credentials::private_key(user, &key_text, passphrase).map_err(|_| Text::TerminalKeyInvalid)
+        Credentials::password(user, secret.to_string()).map_err(|_| Text::TerminalLoginFailed)
     }
 
     fn start(
@@ -279,6 +296,9 @@ impl TerminalPanel {
                 Arc::new(verifier),
             )
         };
+        let control = connector.key_control();
+        let used_stored_key = credentials.uses_stored_key();
+        let user = credentials.user().to_owned();
         let size = TerminalSize::new(100, 30).expect("fixed size is not empty");
         let wake_context = ctx.clone();
         let terminal = {
@@ -300,6 +320,12 @@ impl TerminalPanel {
             selection: None,
             dragged_over: None,
             wheel_rest: 0.0,
+            user,
+            ever_connected: false,
+            used_stored_key,
+            control,
+            easy: used_stored_key,
+            easy_not_saved: false,
         }));
     }
 
@@ -372,8 +398,15 @@ impl TerminalPanel {
         }
     }
 
-    fn show_running(&mut self, ui: &mut egui::Ui, lang: Language) {
+    fn show_running(
+        &mut self,
+        ui: &mut egui::Ui,
+        lang: Language,
+        device: &str,
+        store: &HostKeyStore,
+    ) {
         let mut close = false;
+        let mut easy_choice = None;
         let Stage::Running(running) = &mut self.stage else {
             return;
         };
@@ -395,10 +428,35 @@ impl TerminalPanel {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 close = ui.button(lang.t(Text::TerminalClose)).clicked();
+                // Only a logged-in user can keep or drop the key of the easy login.
+                if running.ever_connected {
+                    ui.add_space(8.0);
+                    let mut on = running.easy;
+                    let switch = theme::switch(ui, &mut on, lang.t(Text::TerminalEasyLogin));
+                    if switch
+                        .on_hover_text(lang.t(Text::TerminalEasyLoginHint))
+                        .changed()
+                    {
+                        easy_choice = Some(on);
+                    }
+                }
             });
         });
+        if let Some(on) = easy_choice {
+            running.set_easy_login(on, device, store);
+        }
+        if running.easy_not_saved {
+            ui.label(
+                RichText::new(lang.t(Text::TerminalEasyLoginNotSaved))
+                    .small()
+                    .color(theme::ERROR),
+            );
+        }
         ui.add_space(6.0);
-        running.draw(ui);
+        // The terminal appears with the first successful login, not while connecting.
+        if running.ever_connected {
+            running.draw(ui);
+        }
         if close {
             self.stage = Stage::Login;
         }
@@ -407,11 +465,32 @@ impl TerminalPanel {
 
 enum Next {
     Ended(Ending),
-    Login(Text),
+    /// Back to the login with a notice; `true` when the key of an easy login did not work.
+    Login(Text, bool),
     HostKey(Box<HostKeyQuestion>),
 }
 
 impl Running {
+    /// Switches easy login (ADR-033): on keeps the session key on the device and stores it here,
+    /// off forgets it here and lets the device entry go when the terminal ends.
+    fn set_easy_login(&mut self, on: bool, device: &str, store: &HostKeyStore) {
+        if on {
+            let stored = self
+                .control
+                .private_key()
+                .is_some_and(|key| store.easy.save(device, &self.user, &key));
+            self.easy_not_saved = !stored;
+            if !stored {
+                return;
+            }
+            self.control.keep(true);
+        } else {
+            self.easy_not_saved = false;
+            store.easy.forget(device);
+            self.control.keep(false);
+        }
+        self.easy = on;
+    }
     /// Passes the device's current way on to the connector; it applies from the next attempt.
     fn follow(&mut self, route: Option<&Route>) {
         if let Ok(mut live) = self.live_route.lock() {
@@ -432,6 +511,7 @@ impl Running {
             ConnectionStatus::Connecting => self.link = Link::Connecting,
             ConnectionStatus::Connected => {
                 self.link = Link::Connected;
+                self.ever_connected = true;
                 self.screen.reset(self.size);
                 // From here on the session key carries the terminal (ADR-032).
                 self.credentials = None;
@@ -458,14 +538,22 @@ impl Running {
                             changed,
                         }))
                     }
-                    _ => Next::Login(Text::TerminalLoginAgain),
+                    _ => Next::Login(Text::TerminalLoginAgain, false),
                 }
             }
-            ConnectError::AuthenticationFailed => Next::Login(if self.credentials.is_some() {
-                Text::TerminalLoginFailed
-            } else {
-                Text::TerminalLoginAgain
-            }),
+            ConnectError::AuthenticationFailed => {
+                // The device no longer knows the key of an easy login: forget it here too.
+                let forget = self.used_stored_key || self.easy;
+                let first_login = self.credentials.is_some();
+                Next::Login(
+                    match (first_login, self.used_stored_key) {
+                        (true, true) => Text::TerminalEasyLoginRejected,
+                        (true, false) => Text::TerminalLoginFailed,
+                        (false, _) => Text::TerminalLoginAgain,
+                    },
+                    forget,
+                )
+            }
             ConnectError::Network(reason) | ConnectError::Refused(reason) => {
                 Next::Ended(Ending::Failed(reason))
             }

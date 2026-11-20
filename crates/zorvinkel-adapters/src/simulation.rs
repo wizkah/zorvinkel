@@ -17,6 +17,8 @@ fn simulated_device() -> DiscoveredDevice {
     DiscoveredDevice {
         handle: "simulation:device-1".into(),
         display_name: "Simulated Zorvinkel".into(),
+        via_ble: true,
+        via_ip: true,
     }
 }
 

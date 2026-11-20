@@ -64,6 +64,7 @@ mod tests {
         let device = |handle: &str| DiscoveredDevice {
             handle: handle.into(),
             display_name: "Pi-967C".into(),
+            ..Default::default()
         };
         let first = RegisteredName {
             handle: "a".into(),
@@ -98,6 +99,7 @@ mod tests {
         let mut devices = vec![DiscoveredDevice {
             handle: "a".into(),
             display_name: "Pi-967C".into(),
+            ..Default::default()
         }];
         apply(&mut devices, &[first, second]);
         assert_eq!(devices[0].display_name, "Pi · 0101010101");

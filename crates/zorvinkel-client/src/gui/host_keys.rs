@@ -9,9 +9,11 @@ pub enum Trust {
     Changed,
 }
 
+/// What the terminal remembers about devices: their trusted host keys, and the keys of easy login.
 pub struct HostKeyStore {
     path: Option<PathBuf>,
     fingerprints: BTreeMap<String, String>,
+    pub easy: super::easy_login::EasyLoginStore,
 }
 impl HostKeyStore {
     const FILE: &'static str = "ssh_host_keys";
@@ -22,6 +24,7 @@ impl HostKeyStore {
         Self {
             fingerprints: parse(&text),
             path: Some(path),
+            easy: super::easy_login::EasyLoginStore::in_directory(directory),
         }
     }
     /// For runs that must not touch the client's data, such as the simulation.
@@ -29,6 +32,7 @@ impl HostKeyStore {
         Self {
             path: None,
             fingerprints: BTreeMap::new(),
+            easy: super::easy_login::EasyLoginStore::none(),
         }
     }
     pub fn stored(&self, device: &str) -> Option<&str> {

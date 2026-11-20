@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- GUI changes (ADR-033, proposed): (1) Terminal: the key file field is gone; once logged in, an "Easy login" switch beside "Close terminal" keeps the session key on the device and stores it in the client data directory (on), or deletes it (off; the entry on the device goes when the terminal closes); with it on, an empty password logs in with the key. The terminal is shown only after the first successful login. (2) The secured session is always renewed automatically; the switch and the expiry warning are gone. (3) "After the device restarts" is now two buttons, "Revert" and "Persist", offered once a connection works. (4) "Use cached password" is merged into the saved-password button: the system's store first, then the one Zorvinkel remembered (request `ReadCachedCredentials` removed). (5) Device tiles show two lamps, BLE and IP, for how the latest search found the device (`DiscoveredDevice::via_ble`, `via_ip`). Verified by build, clippy and tests (new: easy login against the in-process SSH server, key store); not looked at on screen, not tried against a device.
+
 - Fix: the GUI terminal now follows the device when its way changes. Before, a terminal started over Bluetooth kept asking for a tunnel after the device came back to the network and ended with "no tunnel over Bluetooth". The connector now picks Bluetooth or the network address anew for every attempt and abandons a pending tunnel request when the way changes. Verified by build, clippy and tests; not tried against a device.
 
 - Packaging: `packaging/Terminal.md` documents the terminal on the device (requirements `sshd` on loopback and `tmux`, the switch file `/etc/zorvinkel/terminal-disabled`, limits); `install.sh` prints a note when `sshd` or `tmux` is missing.

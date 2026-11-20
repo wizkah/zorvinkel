@@ -1,5 +1,6 @@
 mod device_tab;
 mod devices;
+mod easy_login;
 mod host_keys;
 mod hub;
 mod i18n;
@@ -259,15 +260,21 @@ impl App {
     /// they are still connected.
     fn merge_devices(&mut self, found: Vec<zorvinkel_core::DiscoveredDevice>) {
         for session in &mut self.sessions {
-            session.in_range = found.iter().any(|d| d.handle == session.handle);
+            let device = found.iter().find(|d| d.handle == session.handle);
+            session.in_range = device.is_some();
+            session.via_ble = device.is_some_and(|d| d.via_ble);
+            session.via_ip = device.is_some_and(|d| d.via_ip);
         }
         for device in found {
             if let Some(session) = self.session_mut(&device.handle) {
                 session.name = device.display_name;
             } else {
                 let simulation = self.simulation;
-                self.sessions
-                    .push(Session::new(device.handle, device.display_name, simulation));
+                let (via_ble, via_ip) = (device.via_ble, device.via_ip);
+                let mut session = Session::new(device.handle, device.display_name, simulation);
+                session.via_ble = via_ble;
+                session.via_ip = via_ip;
+                self.sessions.push(session);
             }
         }
         self.sessions

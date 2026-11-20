@@ -4,6 +4,7 @@
 //! to the device's worker. The connector therefore leaves a request here; the window loop turns it
 //! into a worker job (queued behind whatever the worker does, such as a session renewal) and
 //! hands the resulting stream back.
+use super::terminal_page::Route;
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -13,7 +14,6 @@ use tokio::{
     sync::oneshot,
     time::{sleep, timeout},
 };
-use super::terminal_page::Route;
 use zorvinkel_terminal::{ByteStream, ConnectError, Dialer, Dialing};
 
 /// Longest wait for a stream, including the time the worker needs for earlier jobs.
@@ -163,7 +163,9 @@ impl Dialer for RoutedDialer {
                     () = self.changed_from(&route) => {}
                 }
             }
-            Err(ConnectError::Network("the way to the device keeps changing".into()))
+            Err(ConnectError::Network(
+                "the way to the device keeps changing".into(),
+            ))
         })
     }
 }

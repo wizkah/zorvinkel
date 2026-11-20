@@ -81,12 +81,47 @@ fn tile(ui: &mut egui::Ui, session: &Session, lang: Language) -> Option<TileEven
             );
         }
     });
+    column.horizontal(|ui| {
+        reach_indicator(
+            ui,
+            session.via_ble,
+            Text::ReachBle,
+            lang,
+            [Text::ReachBleFound, Text::ReachBleMissing],
+        );
+        ui.add_space(6.0);
+        reach_indicator(
+            ui,
+            session.via_ip,
+            Text::ReachIp,
+            lang,
+            [Text::ReachIpFound, Text::ReachIpMissing],
+        );
+    });
     column.add_space(2.0);
     let event = connection_button(&mut column, session, state, text.width(), lang);
     if background.double_clicked() {
         return Some(TileEvent::Open);
     }
     event
+}
+
+/// A lamp with a label: on when the latest search found the device that way.
+fn reach_indicator(ui: &mut egui::Ui, found: bool, label: Text, lang: Language, hints: [Text; 2]) {
+    let response = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            theme::status_dot(ui, if found { theme::GREEN } else { theme::BORDER });
+            ui.label(RichText::new(lang.t(label)).small().color(if found {
+                theme::GREEN
+            } else {
+                theme::MUTED
+            }));
+        })
+        .response;
+    response
+        .interact(egui::Sense::hover())
+        .on_hover_text(lang.t(hints[usize::from(!found)]));
 }
 
 fn connection_button(

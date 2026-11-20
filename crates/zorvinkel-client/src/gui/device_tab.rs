@@ -50,18 +50,6 @@ impl Session {
                 theme::ERROR,
                 theme::ERROR_PALE,
             );
-        } else if let Some(seconds) = self.expiry_warning() {
-            ui.add_space(8.0);
-            theme::message(
-                ui,
-                &lang.format(Text::SessionEndsIn, &[&seconds]),
-                theme::AMBER,
-                theme::BLUE_PALE,
-            );
-            ui.add_space(4.0);
-            if self.active_action.is_none() && ui.button(lang.t(Text::RenewNow)).clicked() {
-                self.connect();
-            }
         } else if let Some(notice) = self.notice {
             ui.add_space(8.0);
             theme::message(ui, lang.t(notice.text()), theme::BLUE, theme::BLUE_PALE);
@@ -216,14 +204,6 @@ impl Session {
                     ui.label(RichText::new(lang.t(hint)).small().color(theme::MUTED));
                 }
             }
-        }
-        if self.is_connected() && !self.simulation {
-            ui.add_space(12.0);
-            ui.checkbox(
-                &mut self.auto_renew,
-                lang.t(Text::RenewSessionAutomatically),
-            )
-            .on_hover_text(lang.t(Text::RenewSessionHint));
         }
     }
 }

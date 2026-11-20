@@ -170,13 +170,18 @@ impl NativeSetup {
                             .iter_mut()
                             .find(|known| known.handle == handle)
                         {
-                            Some(known) => known.display_name = device.instance.clone(),
+                            Some(known) => {
+                                known.display_name = device.instance.clone();
+                                known.via_ip = true;
+                            }
                             None => self
                                 .snapshot
                                 .devices
                                 .push(zorvinkel_core::DiscoveredDevice {
                                     handle: handle.clone(),
                                     display_name: device.instance.clone(),
+                                    via_ble: false,
+                                    via_ip: true,
                                 }),
                         }
                         self.ip_devices.insert(handle, device);
@@ -696,18 +701,16 @@ impl SetupBackend for NativeSetup {
             return Ok(self.open_tunnel_update());
         }
         if let SetupRequest::ReadSavedCredentials { ssid } = &request {
-            let result = crate::credentials::SystemCredentialSource.saved_wifi_password(ssid);
-            return Ok(SetupUpdate {
-                snapshot: self.snapshot.clone(),
-                error: result.as_ref().err().copied(),
-                saved_password: result.ok(),
-            });
-        }
-        if let SetupRequest::ReadCachedCredentials { ssid } = &request {
-            let result = crate::wifi_cache::system_wifi_cache()
-                .ok_or(SetupError::CredentialsUnavailable)
-                .and_then(|mut cache| cache.cached_password(ssid))
-                .and_then(|found| found.ok_or(SetupError::CredentialsUnavailable));
+            // The system may not know the network; then the password Zorvinkel remembered after
+            // a successful connection is the second place to look.
+            let result = crate::credentials::SystemCredentialSource
+                .saved_wifi_password(ssid)
+                .or_else(|_| {
+                    crate::wifi_cache::system_wifi_cache()
+                        .ok_or(SetupError::CredentialsUnavailable)
+                        .and_then(|mut cache| cache.cached_password(ssid))
+                        .and_then(|found| found.ok_or(SetupError::CredentialsUnavailable))
+                });
             return Ok(SetupUpdate {
                 snapshot: self.snapshot.clone(),
                 error: result.as_ref().err().copied(),

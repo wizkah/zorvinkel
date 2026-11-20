@@ -119,6 +119,8 @@ impl ProbeCentral {
                 discovered.push(DiscoveredDevice {
                     handle,
                     display_name: name.unwrap_or_else(|| "Zorvinkel BLE probe".into()),
+                    via_ble: true,
+                    via_ip: false,
                 });
                 self.devices.push(peripheral);
             }

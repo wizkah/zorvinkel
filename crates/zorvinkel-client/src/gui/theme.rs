@@ -95,6 +95,33 @@ pub fn status_dot(ui: &mut egui::Ui, color: Color32) {
     ui.painter().circle_filled(rect.center(), 5.0, color);
 }
 
+/// A labelled on/off switch; the response reports `changed` when it was clicked.
+pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
+    let mut response = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(32.0, 18.0), egui::Sense::click());
+            let fill = if *on { BLUE } else { BORDER };
+            ui.painter().rect_filled(rect, 9.0, fill);
+            let knob = if *on {
+                rect.right() - 9.0
+            } else {
+                rect.left() + 9.0
+            };
+            ui.painter()
+                .circle_filled(egui::pos2(knob, rect.center().y), 7.0, Color32::WHITE);
+            let label = ui.add(egui::Label::new(label).sense(egui::Sense::click()));
+            response.union(label)
+        })
+        .inner;
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response
+}
+
 pub fn message(ui: &mut egui::Ui, text: &str, foreground: Color32, background: Color32) {
     egui::Frame::new()
         .fill(background)

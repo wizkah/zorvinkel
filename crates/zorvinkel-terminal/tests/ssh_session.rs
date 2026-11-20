@@ -352,6 +352,54 @@ async fn password_is_replaced_by_a_session_key_and_the_key_is_removed_again() {
     assert!(removal.contains(blob), "removes the deposited key");
 }
 
+#[tokio::test]
+async fn easy_login_keeps_the_key_and_hands_it_out_for_the_next_login() {
+    use zorvinkel_terminal::Connector;
+    let (address, device, fingerprint) = start_device().await;
+    let mut connector = connector(&address, PASSWORD, &fingerprint);
+    let control = connector.key_control();
+    assert!(control.private_key().is_none(), "no key before the login");
+
+    let session = connector.connect(size()).await.unwrap();
+    session.close().await;
+    let key_text = control
+        .private_key()
+        .expect("the session key exists after login");
+    control.keep(true);
+    connector.release().await;
+    {
+        let seen = device.seen.lock().unwrap();
+        assert_eq!(seen.maintenance.len(), 1, "deposit only, nothing removed");
+    }
+
+    // The next login uses the stored key and no password; switching easy login off removes it.
+    let stored = Credentials::stored_key("pi", &key_text).unwrap();
+    assert!(stored.uses_stored_key());
+    let mut later = SshConnector::new(
+        address.clone(),
+        stored,
+        Arc::new({
+            let trusted = fingerprint.clone();
+            move |presented: &str| presented == trusted
+        }),
+    );
+    let later_control = later.key_control();
+    assert!(later_control.is_kept(), "a stored key starts out kept");
+    let session = later.connect(size()).await.unwrap();
+    session.close().await;
+    later_control.keep(false);
+    later.release().await;
+    let seen = device.seen.lock().unwrap();
+    assert_eq!(seen.logins.last().copied(), Some("key"));
+    assert!(
+        !seen.logins[1..].contains(&"password"),
+        "password only once"
+    );
+    assert_eq!(seen.maintenance.len(), 2, "deposit, then removal");
+    let blob = seen.maintenance[0].split_whitespace().rev().nth(3).unwrap();
+    assert!(seen.maintenance[1].contains(blob));
+}
+
 /// Opens a Bluetooth-style tunnel for every connection: keys, records and credit run in this
 /// process, and the device end connects to the in-process `sshd` over loopback.
 struct TunnelDialer {

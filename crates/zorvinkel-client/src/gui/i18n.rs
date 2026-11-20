@@ -161,6 +161,12 @@ texts! {
     NotConnected { en: "Not connected", de: "Nicht verbunden" },
     PathBluetooth { en: "Bluetooth", de: "Bluetooth" },
     PathNetwork { en: "Network (IP)", de: "Netzwerk (IP)" },
+    ReachBle { en: "BLE", de: "BLE" },
+    ReachIp { en: "IP", de: "IP" },
+    ReachBleFound { en: "Found over Bluetooth", de: "Über Bluetooth gefunden" },
+    ReachBleMissing { en: "Not found over Bluetooth", de: "Über Bluetooth nicht gefunden" },
+    ReachIpFound { en: "Found on the network", de: "Im Netzwerk gefunden" },
+    ReachIpMissing { en: "Not found on the network", de: "Im Netzwerk nicht gefunden" },
     PathSimulation { en: "Simulation", de: "Simulation" },
 
     // Titles of running requests: the overlay and the short label of tiles and tabs
@@ -221,11 +227,6 @@ texts! {
         en: "Disconnected because another device was connected.",
         de: "Getrennt, weil ein anderes Gerät verbunden wurde.",
     },
-    SessionEndsIn {
-        en: "The secured session ends in {0} s. Renew it to stay connected.",
-        de: "Die gesicherte Sitzung endet in {0} s. Erneuere sie, um verbunden zu bleiben.",
-    },
-    RenewNow { en: "Renew now", de: "Jetzt erneuern" },
     NoWifiSetupOffered {
         en: "This device does not offer Wi-Fi setup yet. Update the device service.",
         de: "Dieses Gerät bietet noch keine WLAN-Einrichtung an. Aktualisiere den Gerätedienst.",
@@ -265,8 +266,8 @@ texts! {
         de: "Verbindung fehlgeschlagen. Prüfe das Passwort und versuche es erneut.",
     },
     ErrorSessionExpired {
-        en: "The secured session has expired (after 10 minutes or 1024 messages, a security limit). Connect to the device again or turn on automatic renewal.",
-        de: "Die gesicherte Sitzung ist abgelaufen (nach 10 Minuten oder 1024 Nachrichten, eine Sicherheitsgrenze). Verbinde das Gerät erneut oder aktiviere die automatische Erneuerung.",
+        en: "The secured session has expired (after 10 minutes or 1024 messages, a security limit). Connect to the device again.",
+        de: "Die gesicherte Sitzung ist abgelaufen (nach 10 Minuten oder 1024 Nachrichten, eine Sicherheitsgrenze). Verbinde das Gerät erneut.",
     },
     ErrorNoActiveNetwork {
         en: "The device is not connected to any network. Set up a Wi-Fi first or turn on the device Wi-Fi.",
@@ -295,11 +296,6 @@ texts! {
         en: "Not offered by the device. Update the device service.",
         de: "Vom Gerät nicht angeboten. Aktualisiere den Gerätedienst.",
     },
-    RenewSessionAutomatically { en: "Renew session automatically", de: "Sitzung automatisch erneuern" },
-    RenewSessionHint {
-        en: "The secured session ends after 10 minutes or 1024 messages. If renewal is off, the connection ends then.",
-        de: "Die gesicherte Sitzung endet nach 10 Minuten oder 1024 Nachrichten. Ist die Erneuerung aus, endet die Verbindung dann.",
-    },
     FunctionWifi { en: "Set up Wi-Fi", de: "WLAN einrichten" },
     FunctionAccessPoint { en: "Device's own Wi-Fi", de: "Eigenes WLAN des Geräts" },
     FunctionRestartOption { en: "Restart option", de: "Neustartoption" },
@@ -325,8 +321,7 @@ texts! {
     RefreshNetworks { en: "Refresh networks", de: "WLANs aktualisieren" },
     WifiName { en: "Wi-Fi name", de: "WLAN-Name" },
     Password { en: "Password", de: "Passwort" },
-    GetSystemPassword { en: "Get Wi-Fi password from the system", de: "WLAN-Passwort vom System holen" },
-    UseCachedPassword { en: "Use cached password", de: "Zwischengespeichertes Passwort nutzen" },
+    GetSystemPassword { en: "Fill in the saved Wi-Fi password", de: "Gespeichertes WLAN-Passwort einsetzen" },
     DemoPassword { en: "Demo password: {0}", de: "Demo-Passwort: {0}" },
     DemoWrongPassword {
         en: "Any other password simulates a failed attempt.",
@@ -338,25 +333,19 @@ texts! {
 
     // Restart choice
     AfterRestart { en: "After the device restarts", de: "Nach einem Neustart des Geräts" },
-    RestartUseOriginal { en: "Use the original settings again", de: "Ursprüngliche Einstellungen wieder verwenden" },
-    RestartUseLastAccepted { en: "Use the last successful setting", de: "Letzte erfolgreiche Einstellung verwenden" },
-    RestartKeepCurrent { en: "Keep the current setting", de: "Aktuelle Einstellung behalten" },
-    RestartFollowChanges { en: "Also adopt later changes", de: "Spätere Änderungen ebenfalls übernehmen" },
-    RestartSetAsDefault {
-        en: "Set the current setting as the new default",
-        de: "Aktuelle Einstellung als neuen Standard festlegen",
+    RestartPrompt {
+        en: "The connection works. Choose what the device does after a restart.",
+        de: "Die Verbindung funktioniert. Wähle, was das Gerät nach einem Neustart tut.",
     },
+    RestartRevert { en: "Revert", de: "Zurücksetzen" },
+    RestartPersist { en: "Persist", de: "Beibehalten" },
     RestartHintOriginal {
-        en: "After a restart the device's original configuration applies. The device reverts changes if the app does not report back within a minute.",
-        de: "Nach einem Neustart gilt die ursprüngliche Konfiguration des Geräts. Änderungen nimmt das Gerät zurück, wenn sich die App nicht binnen einer Minute wieder meldet.",
-    },
-    RestartHintFixed {
-        en: "The setting fixed now returns after every restart and after every reverted change. New settings are not kept.",
-        de: "Die jetzt festgelegte Einstellung kehrt nach jedem Neustart und nach jeder zurückgenommenen Änderung wieder. Neue Einstellungen werden nicht behalten.",
+        en: "Revert: after a restart the device returns to its earlier settings. The device also reverts changes if the app does not report back within a minute.",
+        de: "Zurücksetzen: Nach einem Neustart kehrt das Gerät zu seinen früheren Einstellungen zurück. Änderungen nimmt das Gerät außerdem zurück, wenn sich die App nicht binnen einer Minute wieder meldet.",
     },
     RestartHintKeep {
-        en: "Connections you set up successfully from now on, and the own Wi-Fi, survive a restart. Settings already saved stay unchanged.",
-        de: "Verbindungen, die du ab jetzt erfolgreich einrichtest, und das eigene WLAN bleiben nach einem Neustart bestehen. Bereits gespeicherte Einstellungen bleiben unverändert.",
+        en: "Persist: the current setting stays after a restart.",
+        de: "Beibehalten: Die aktuelle Einstellung bleibt nach einem Neustart erhalten.",
     },
     RestartSimulationHint {
         en: "The choice is saved on the simulated device. All settings are discarded when the demo ends.",
@@ -469,8 +458,8 @@ texts! {
     ServiceUnknown { en: "Unknown", de: "Unbekannt" },
     PageTerminal { en: "Terminal", de: "Terminal" },
     TerminalIntro {
-        en: "Log in with an account of the device. The password is used once; the terminal then continues with a temporary key that exists only in this program.",
-        de: "Mit einem Konto des Geräts anmelden. Das Passwort wird nur einmal verwendet; das Terminal läuft danach mit einem vorübergehenden Schlüssel weiter, der nur in diesem Programm existiert.",
+        en: "Log in with an account of the device. The password is used once; the terminal then continues with a key. Once logged in, \"Easy login\" can keep that key for the next time.",
+        de: "Mit einem Konto des Geräts anmelden. Das Passwort wird nur einmal verwendet; das Terminal läuft danach mit einem Schlüssel weiter. Nach der Anmeldung kann die „Einfache Anmeldung“ diesen Schlüssel für das nächste Mal behalten.",
     },
     TerminalUser { en: "User", de: "Benutzer" },
     TerminalPassword { en: "Password", de: "Passwort" },
@@ -486,18 +475,22 @@ texts! {
         en: "Connection lost, reconnecting (attempt {0}) …",
         de: "Verbindung unterbrochen, Wiederverbindung (Versuch {0}) …",
     },
-    TerminalKeyFile { en: "Key file (optional)", de: "Schlüsseldatei (optional)" },
-    TerminalKeyFileHint {
-        en: "Path of a private SSH key. The password field is then the passphrase of the key; leave it empty if the key has none.",
-        de: "Pfad eines privaten SSH-Schlüssels. Das Passwortfeld ist dann die Passphrase des Schlüssels; leer lassen, wenn er keine hat.",
+    TerminalEasyLogin { en: "Easy login", de: "Einfache Anmeldung" },
+    TerminalEasyLoginHint {
+        en: "On: a key is stored on the device and on this computer, so the next login needs no password. Off: the key is deleted here, and from the device when the terminal closes.",
+        de: "An: Ein Schlüssel wird am Gerät und auf diesem Computer hinterlegt, die nächste Anmeldung braucht dann kein Passwort. Aus: Der Schlüssel wird hier gelöscht und am Gerät beim Schließen des Terminals.",
     },
-    TerminalKeyUnreadable {
-        en: "The key file could not be read.",
-        de: "Die Schlüsseldatei konnte nicht gelesen werden.",
+    TerminalEasyLoginActive {
+        en: "Easy login is set up for this user: leave the password empty to use it.",
+        de: "Für diesen Benutzer ist die einfache Anmeldung eingerichtet: Passwort leer lassen, um sie zu nutzen.",
     },
-    TerminalKeyInvalid {
-        en: "The key file is not a usable private key, or the passphrase is wrong.",
-        de: "Die Schlüsseldatei ist kein brauchbarer privater Schlüssel, oder die Passphrase ist falsch.",
+    TerminalEasyLoginRejected {
+        en: "The device did not accept the stored key any more; easy login is off. Log in with the password.",
+        de: "Das Gerät hat den gespeicherten Schlüssel nicht mehr akzeptiert; die einfache Anmeldung ist aus. Mit dem Passwort anmelden.",
+    },
+    TerminalEasyLoginNotSaved {
+        en: "Easy login could not be turned on: the key could not be stored on this computer.",
+        de: "Die einfache Anmeldung konnte nicht eingeschaltet werden: Der Schlüssel konnte auf diesem Computer nicht gespeichert werden.",
     },
     TerminalLoginFailed {
         en: "Login failed. Check user and password.",

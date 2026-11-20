@@ -5,8 +5,6 @@ use zorvinkel_application::{power::PowerAction, services::ServiceAction, setup::
 
 /// The session is renewed this long before the secure profile would end it.
 const RENEW_BEFORE: Duration = Duration::from_secs(45);
-/// From here on a session without automatic renewal shows a notice.
-const WARN_BEFORE: Duration = Duration::from_secs(120);
 
 /// A hint about the device, kept as an identifier so that it follows the language.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -73,8 +71,7 @@ impl Action {
             SetupRequest::Disconnect => Self::Disconnect,
             SetupRequest::Scan => Self::Scan,
             SetupRequest::ConnectWifi { .. } => Self::Wifi,
-            SetupRequest::ReadSavedCredentials { .. }
-            | SetupRequest::ReadCachedCredentials { .. } => Self::Credentials,
+            SetupRequest::ReadSavedCredentials { .. } => Self::Credentials,
             SetupRequest::SetWifiPersistence(_) => Self::Persistence,
             SetupRequest::PowerDevice(action) => Self::Power(*action),
             SetupRequest::ServiceAction { action, .. } => Self::Service(*action),
@@ -145,6 +142,9 @@ pub struct Session {
     pub handle: String,
     pub name: String,
     pub in_range: bool,
+    /// What the latest search found the device over; both are off while it is out of range.
+    pub via_ble: bool,
+    pub via_ip: bool,
     pub tab_open: bool,
     pub simulation: bool,
     pub snapshot: SetupSnapshot,
@@ -168,8 +168,6 @@ pub struct Session {
     pub show_ap_password: bool,
     pub notice: Option<Notice>,
     pub error: Option<SetupError>,
-    /// Renews the secured session before it ends instead of letting the device disconnect.
-    pub auto_renew: bool,
     /// Login, host key question or running terminal; dropped when the device is disconnected.
     pub terminal: Option<super::terminal_page::TerminalPanel>,
     /// Where the terminal's connector asks for streams of the Bluetooth tunnel.
@@ -185,6 +183,8 @@ impl Session {
             handle,
             name,
             in_range: true,
+            via_ble: true,
+            via_ip: false,
             tab_open: false,
             simulation,
             snapshot: SetupSnapshot::default(),
@@ -204,7 +204,6 @@ impl Session {
             show_ap_password: true,
             notice: None,
             error: None,
-            auto_renew: true,
             terminal: None,
             tunnel_broker: Default::default(),
             tunnel_job: false,
@@ -248,8 +247,7 @@ impl Session {
     }
     /// A connected device whose secured session is about to end and should be renewed now.
     pub fn needs_renewal(&self) -> bool {
-        self.auto_renew
-            && self.is_connected()
+        self.is_connected()
             && self.error.is_none()
             && self.active_action.is_none()
             && !self.refresh_pending
@@ -257,11 +255,6 @@ impl Session {
                 .snapshot
                 .session_remaining
                 .is_some_and(|left| left <= RENEW_BEFORE)
-    }
-    /// Seconds left when the session ends soon and nothing renews it.
-    pub fn expiry_warning(&self) -> Option<u64> {
-        let left = self.snapshot.session_remaining?;
-        (!self.auto_renew && self.is_connected() && left <= WARN_BEFORE).then_some(left.as_secs())
     }
     /// Text for the path the device is reached over.
     pub fn path_text(&self) -> Option<Text> {
@@ -419,19 +412,13 @@ mod tests {
         session
     }
     #[test]
-    fn a_session_is_renewed_shortly_before_it_ends_unless_the_user_opted_out() {
+    fn a_session_is_renewed_shortly_before_it_ends() {
         let mut session = connected_over(Transport::Ip, Some(Duration::from_secs(300)));
         assert!(!session.needs_renewal());
         session.snapshot.session_remaining = Some(RENEW_BEFORE);
         assert!(session.needs_renewal());
         session.refresh_pending = true;
         assert!(!session.needs_renewal());
-        session.refresh_pending = false;
-        session.auto_renew = false;
-        assert!(!session.needs_renewal());
-        assert_eq!(session.expiry_warning(), Some(RENEW_BEFORE.as_secs()));
-        session.snapshot.session_remaining = Some(Duration::from_secs(500));
-        assert_eq!(session.expiry_warning(), None);
     }
     #[test]
     fn the_connection_path_is_named_and_a_switch_to_bluetooth_is_announced() {

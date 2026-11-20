@@ -113,12 +113,9 @@ pub enum SetupRequest {
     UpdateAccessPoint(AccessPointSettings),
     RestartLastAccepted,
     RestartCurrentAsDefault,
-    /// Reads the password the client system has stored for this network, on explicit request.
+    /// Reads the password for this network on explicit request: the client system's store
+    /// first, then the one Zorvinkel remembered after a successful connection.
     ReadSavedCredentials {
-        ssid: String,
-    },
-    /// Reads the password Zorvinkel remembered after a successful connection to this network.
-    ReadCachedCredentials {
         ssid: String,
     },
     /// Keep (true) or discard (false) Wi-Fi connections made from now on after a restart.
