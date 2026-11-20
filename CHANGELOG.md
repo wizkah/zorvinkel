@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix: the GUI terminal now follows the device when its way changes. Before, a terminal started over Bluetooth kept asking for a tunnel after the device came back to the network and ended with "no tunnel over Bluetooth". The connector now picks Bluetooth or the network address anew for every attempt and abandons a pending tunnel request when the way changes. Verified by build, clippy and tests; not tried against a device.
+
 - Packaging: `packaging/Terminal.md` documents the terminal on the device (requirements `sshd` on loopback and `tmux`, the switch file `/etc/zorvinkel/terminal-disabled`, limits); `install.sh` prints a note when `sshd` or `tmux` is missing.
 
 - Terminal over Bluetooth in the GUI (ADR-031): the terminal page is offered when the device is connected over Bluetooth and reports the tunnel capability (otherwise it still needs a network address). The terminal's connector gets its streams from the device's worker through a broker, so tunnel requests queue behind refreshes and session renewals; a busy device is retried, a device that does not offer the terminal (switched off) ends the attempt with a message. New request `OpenTunnel`, snapshot fields `tunnel_available` and `tunnel`, and the diagnostic `zorvinkel-client --ble-ssh-test directory handle user key-file`. Run against a Raspberry Pi 4 over Bluetooth: key login and `tmux` through the tunnel, keystroke echo median 90 ms (95th percentile 110 ms, 30 samples). Verified by build, clippy and tests (73 client tests); the GUI page itself was not driven on screen. Known: the status session ends after ten minutes and the Bluetooth connection with it, so the terminal reconnects through a new tunnel about every ten minutes.

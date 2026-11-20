@@ -4,11 +4,11 @@ use super::{
     host_keys::{HostKeyStore, Trust},
     i18n::{Language, Text},
     terminal_colors as colors, terminal_input, theme,
-    tunnel_broker::{BluetoothDialer, TunnelBroker},
+    tunnel_broker::{LiveRoute, RoutedDialer, TunnelBroker},
 };
 use eframe::egui::{self, Color32, FontId, Rect, RichText, Sense, Stroke, Vec2};
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::IpAddr,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -20,8 +20,6 @@ use zorvinkel_terminal::{
     Screen, SshConnector, TerminalSize,
 };
 
-const SSH_PORT: u16 = 22;
-
 /// How the terminal reaches `sshd`: over the network, or through the Bluetooth tunnel.
 #[derive(Clone)]
 pub enum Route {
@@ -29,6 +27,14 @@ pub enum Route {
     Bluetooth(Arc<TunnelBroker>),
 }
 impl Route {
+    /// Both lead to the device the same way (same address, or both through Bluetooth).
+    pub fn same_way(&self, other: &Route) -> bool {
+        match (self, other) {
+            (Self::Ip(a), Self::Ip(b)) => a == b,
+            (Self::Bluetooth(_), Self::Bluetooth(_)) => true,
+            _ => false,
+        }
+    }
     fn describe(&self, lang: Language) -> String {
         match self {
             Self::Ip(address) => address.to_string(),
@@ -63,6 +69,8 @@ struct Running {
     /// Kept until the first successful login, for the host key question only (ADR-032).
     credentials: Option<Credentials>,
     route: Route,
+    /// Shared with the connector, which follows the device when its way changes.
+    live_route: LiveRoute,
     selection: Option<Selection>,
     /// Cell of the last drag report, so a program is told only about changes.
     dragged_over: Option<(u16, u16)>,
@@ -159,6 +167,9 @@ impl TerminalPanel {
         route: Option<Route>,
         store: &mut HostKeyStore,
     ) {
+        if let Stage::Running(running) = &mut self.stage {
+            running.follow(route.as_ref());
+        }
         match &self.stage {
             Stage::Login => self.show_login(ui, lang, device, route, store),
             Stage::HostKey(_) => self.show_host_key(ui, lang, device, store),
@@ -256,23 +267,17 @@ impl TerminalPanel {
             }
             known.as_deref() == Some(fingerprint)
         };
-        let connector = match &route {
-            Route::Ip(address) => SshConnector::new(
-                SocketAddr::new(*address, SSH_PORT).to_string(),
+        let live_route: LiveRoute = Arc::new(Mutex::new(Some(route.clone())));
+        let connector = {
+            let context = ctx.clone();
+            SshConnector::with_dialer(
+                Arc::new(RoutedDialer {
+                    route: live_route.clone(),
+                    wake: Arc::new(move || context.request_repaint()),
+                }),
                 credentials.clone(),
                 Arc::new(verifier),
-            ),
-            Route::Bluetooth(broker) => {
-                let context = ctx.clone();
-                SshConnector::with_dialer(
-                    Arc::new(BluetoothDialer {
-                        broker: broker.clone(),
-                        wake: Arc::new(move || context.request_repaint()),
-                    }),
-                    credentials.clone(),
-                    Arc::new(verifier),
-                )
-            }
+            )
         };
         let size = TerminalSize::new(100, 30).expect("fixed size is not empty");
         let wake_context = ctx.clone();
@@ -291,6 +296,7 @@ impl TerminalPanel {
             presented,
             credentials: Some(credentials),
             route,
+            live_route,
             selection: None,
             dragged_over: None,
             wheel_rest: 0.0,
@@ -406,6 +412,15 @@ enum Next {
 }
 
 impl Running {
+    /// Passes the device's current way on to the connector; it applies from the next attempt.
+    fn follow(&mut self, route: Option<&Route>) {
+        if let Ok(mut live) = self.live_route.lock() {
+            *live = route.cloned();
+        }
+        if let Some(route) = route {
+            self.route = route.clone();
+        }
+    }
     /// `Some` when the connection ended for good and the page has to change.
     fn apply(
         &mut self,

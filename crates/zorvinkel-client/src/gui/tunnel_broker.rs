@@ -13,6 +13,7 @@ use tokio::{
     sync::oneshot,
     time::{sleep, timeout},
 };
+use super::terminal_page::Route;
 use zorvinkel_terminal::{ByteStream, ConnectError, Dialer, Dialing};
 
 /// Longest wait for a stream, including the time the worker needs for earlier jobs.
@@ -101,6 +102,74 @@ impl Dialer for BluetoothDialer {
     }
 }
 
+/// The way to the device as the window currently sees it; the terminal keeps it up to date.
+pub type LiveRoute = Arc<Mutex<Option<Route>>>;
+const ROUTE_WATCH: Duration = Duration::from_millis(500);
+
+/// Picks the way to the device anew for every connection attempt: after the device changed
+/// from Bluetooth to the network (or back), a reconnect has to follow it.
+pub struct RoutedDialer {
+    pub route: LiveRoute,
+    pub wake: Arc<dyn Fn() + Send + Sync>,
+}
+impl RoutedDialer {
+    fn current(&self) -> Option<Route> {
+        self.route
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+    /// Returns once the route is no longer `route`.
+    async fn changed_from(&self, route: &Route) {
+        loop {
+            sleep(ROUTE_WATCH).await;
+            match self.current() {
+                Some(now) if now.same_way(route) => {}
+                _ => return,
+            }
+        }
+    }
+    async fn dial_route(&self, route: &Route) -> Result<Box<dyn ByteStream>, ConnectError> {
+        match route {
+            Route::Ip(address) => {
+                let socket = std::net::SocketAddr::new(*address, SSH_PORT);
+                let stream = tokio::net::TcpStream::connect(socket)
+                    .await
+                    .map_err(|error| ConnectError::Network(error.to_string()))?;
+                let _ = stream.set_nodelay(true);
+                Ok(Box::new(stream))
+            }
+            Route::Bluetooth(broker) => {
+                BluetoothDialer {
+                    broker: broker.clone(),
+                    wake: self.wake.clone(),
+                }
+                .dial()
+                .await
+            }
+        }
+    }
+}
+impl Dialer for RoutedDialer {
+    fn dial(&self) -> Dialing<'_> {
+        Box::pin(async move {
+            // The route may change while an attempt waits; then the attempt starts over.
+            for _ in 0..ROUTE_SWITCHES {
+                let Some(route) = self.current() else {
+                    return Err(ConnectError::Network("no way to the device".into()));
+                };
+                tokio::select! {
+                    result = self.dial_route(&route) => return result,
+                    () = self.changed_from(&route) => {}
+                }
+            }
+            Err(ConnectError::Network("the way to the device keeps changing".into()))
+        })
+    }
+}
+const ROUTE_SWITCHES: usize = 5;
+const SSH_PORT: u16 = 22;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +225,25 @@ mod tests {
         wait_for_ask(&broker).await;
         broker.answer(Err(TunnelFailure::Unreachable));
         assert!(dialing.await.unwrap().err().unwrap().is_retryable());
+    }
+    #[tokio::test]
+    async fn a_dial_waiting_for_bluetooth_follows_the_device_to_the_network() {
+        let broker = Arc::new(TunnelBroker::default());
+        let route: LiveRoute = Arc::new(Mutex::new(Some(Route::Bluetooth(broker.clone()))));
+        let dialer = Arc::new(RoutedDialer {
+            route: route.clone(),
+            wake: Arc::new(|| {}),
+        });
+        let waiting = dialer.clone();
+        let dialing = tokio::spawn(async move { waiting.dial().await.err() });
+        wait_for_ask(&broker).await;
+        // Nothing listens on this address, so the attempt over the network fails quickly.
+        *route.lock().unwrap() = Some(Route::Ip("127.0.0.1".parse().unwrap()));
+        let error = tokio::time::timeout(Duration::from_secs(10), dialing)
+            .await
+            .expect("the dial left the Bluetooth wait")
+            .unwrap();
+        assert!(error.is_none() || error.unwrap().is_retryable());
     }
     #[tokio::test]
     async fn requests_of_a_connector_that_gave_up_are_skipped() {
