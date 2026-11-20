@@ -39,7 +39,7 @@ pub enum Function {
     Services,
     ServiceActions,
     Power,
-    /// Interactive SSH terminal; needs an address of the device, not a device capability.
+    /// Interactive SSH terminal; needs an address of the device or a tunnel over Bluetooth.
     Terminal,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +78,8 @@ impl SetupSnapshot {
                 state(
                     self.system_info
                         .as_ref()
-                        .is_some_and(|info| info.ssh_address().is_some()),
+                        .is_some_and(|info| info.ssh_address().is_some())
+                        || (self.tunnel_available && self.transport == Some(Transport::Ble)),
                 ),
             ),
         ]
@@ -94,6 +95,9 @@ pub enum Transport {
 
 pub enum SetupRequest {
     Discover,
+    /// Opens a terminal tunnel over the connected Bluetooth device; the stream arrives in
+    /// `SetupSnapshot::tunnel` (ADR-031). A refusal is reported in the update, the connection stays.
+    OpenTunnel,
     Connect(String),
     Disconnect,
     Refresh,
@@ -128,6 +132,23 @@ pub enum SetupRequest {
     },
 }
 
+/// Hands one transport stream from the backend thread to the caller. The type of the stream is
+/// the adapter's business, so it travels as `Any`; whoever opened it knows what to ask for.
+#[derive(Clone, Default)]
+pub struct TunnelHandoff(std::sync::Arc<std::sync::Mutex<Option<Box<dyn std::any::Any + Send>>>>);
+impl TunnelHandoff {
+    pub fn put<T: std::any::Any + Send>(&self, stream: T) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = Some(Box::new(stream));
+        }
+    }
+    /// The stream, once; `None` when none was left or it has another type.
+    pub fn take<T: std::any::Any + Send>(&self) -> Option<T> {
+        let boxed = self.0.lock().ok()?.take()?;
+        boxed.downcast::<T>().ok().map(|stream| *stream)
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct SetupSnapshot {
     pub devices: Vec<DiscoveredDevice>,
@@ -155,6 +176,10 @@ pub struct SetupSnapshot {
     pub restart_policy: Option<RestartPolicy>,
     /// How the connected device is reached; `None` while disconnected or simulated.
     pub transport: Option<Transport>,
+    /// The device offers the terminal tunnel (capability); usable over Bluetooth only.
+    pub tunnel_available: bool,
+    /// Where a stream opened by `OpenTunnel` is left for the caller.
+    pub tunnel: TunnelHandoff,
     /// Time the secured session has left before it ends; `ZERO` once it must be renewed.
     pub session_remaining: Option<std::time::Duration>,
 }

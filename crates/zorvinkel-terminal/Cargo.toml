@@ -19,3 +19,5 @@ rand = { version = "0.10", features = ["thread_rng"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "test-util"] }
+zorvinkel-adapters = { workspace = true, features = ["tunnel"] }
+zorvinkel-protocol.workspace = true

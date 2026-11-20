@@ -139,6 +139,10 @@ impl TunnelCipher {
     pub fn close(&mut self) {
         self.state = None;
     }
+    /// The absolute lifetime has passed; the next record would fail.
+    pub fn is_expired(&self, now: Duration) -> bool {
+        now.saturating_sub(self.started) >= self.lifetime
+    }
     pub fn sent(&self) -> u64 {
         self.sent
     }

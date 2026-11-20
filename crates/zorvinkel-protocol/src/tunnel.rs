@@ -298,6 +298,38 @@ mod tests {
     }
 
     #[test]
+    fn tunnel_open_travels_as_a_status_operation() {
+        use crate::status::*;
+        let open = OpenRequest {
+            frame_length: 185,
+            noise: [3; REQUEST_NOISE],
+        };
+        let request = Request {
+            id: 5,
+            operation: Operation::TunnelOpen,
+        };
+        let bytes = encode_request_payload(request, &open.to_bytes()).unwrap();
+        assert_eq!(decode_request(&bytes), Ok(request));
+        assert_eq!(request_payload(&bytes).unwrap(), open.to_bytes());
+        assert!(
+            encode_request_payload(request, &[]).is_err(),
+            "needs the key exchange"
+        );
+        let response = Response {
+            id: 5,
+            body: ResponseBody::TunnelOpened(OpenResponse {
+                frame_length: 185,
+                window: 16,
+                noise: [4; RESPONSE_NOISE],
+            }),
+        };
+        assert_eq!(
+            decode_response(&encode_response(&response).unwrap()),
+            Ok(response)
+        );
+    }
+
+    #[test]
     fn records_round_trip_within_the_frame_length() {
         let longest = vec![0x42; max_data(185)];
         for record in [

@@ -4,6 +4,7 @@ use super::{
     host_keys::{HostKeyStore, Trust},
     i18n::{Language, Text},
     terminal_colors as colors, terminal_input, theme,
+    tunnel_broker::{BluetoothDialer, TunnelBroker},
 };
 use eframe::egui::{self, Color32, FontId, Rect, RichText, Sense, Stroke, Vec2};
 use std::{
@@ -20,6 +21,21 @@ use zorvinkel_terminal::{
 };
 
 const SSH_PORT: u16 = 22;
+
+/// How the terminal reaches `sshd`: over the network, or through the Bluetooth tunnel.
+#[derive(Clone)]
+pub enum Route {
+    Ip(IpAddr),
+    Bluetooth(Arc<TunnelBroker>),
+}
+impl Route {
+    fn describe(&self, lang: Language) -> String {
+        match self {
+            Self::Ip(address) => address.to_string(),
+            Self::Bluetooth(_) => lang.t(Text::PathBluetooth).to_owned(),
+        }
+    }
+}
 const FONT_SIZE: f32 = 14.0;
 const MIN_HEIGHT: f32 = 320.0;
 /// Time the cleanup on the device (ADR-032) may take when the terminal is closed.
@@ -46,7 +62,7 @@ struct Running {
     presented: Arc<Mutex<Option<String>>>,
     /// Kept until the first successful login, for the host key question only (ADR-032).
     credentials: Option<Credentials>,
-    address: IpAddr,
+    route: Route,
     selection: Option<Selection>,
     /// Cell of the last drag report, so a program is told only about changes.
     dragged_over: Option<(u16, u16)>,
@@ -69,7 +85,7 @@ impl Drop for Running {
 }
 struct HostKeyQuestion {
     credentials: Credentials,
-    address: IpAddr,
+    route: Route,
     fingerprint: String,
     changed: bool,
 }
@@ -140,11 +156,11 @@ impl TerminalPanel {
         ui: &mut egui::Ui,
         lang: Language,
         device: &str,
-        address: Option<IpAddr>,
+        route: Option<Route>,
         store: &mut HostKeyStore,
     ) {
         match &self.stage {
-            Stage::Login => self.show_login(ui, lang, device, address, store),
+            Stage::Login => self.show_login(ui, lang, device, route, store),
             Stage::HostKey(_) => self.show_host_key(ui, lang, device, store),
             Stage::Ended(_) => self.show_ended(ui, lang),
             Stage::Running(_) => self.show_running(ui, lang),
@@ -156,7 +172,7 @@ impl TerminalPanel {
         ui: &mut egui::Ui,
         lang: Language,
         device: &str,
-        address: Option<IpAddr>,
+        route: Option<Route>,
         store: &HostKeyStore,
     ) {
         ui.label(lang.t(Text::TerminalIntro));
@@ -165,7 +181,7 @@ impl TerminalPanel {
             theme::message(ui, lang.t(notice), theme::ERROR, theme::ERROR_PALE);
             ui.add_space(8.0);
         }
-        let Some(address) = address else {
+        let Some(route) = route else {
             ui.label(lang.t(Text::TerminalNoAddress));
             return;
         };
@@ -189,7 +205,7 @@ impl TerminalPanel {
         let open = ui.add_enabled(ready, theme::primary_button(lang.t(Text::TerminalOpen)));
         if open.clicked() {
             match self.credentials_from_form() {
-                Ok(credentials) => self.start(ui.ctx(), device, address, credentials, store),
+                Ok(credentials) => self.start(ui.ctx(), device, route, credentials, store),
                 Err(notice) => self.notice = Some(notice),
             }
         }
@@ -215,7 +231,7 @@ impl TerminalPanel {
         &mut self,
         ctx: &egui::Context,
         device: &str,
-        address: IpAddr,
+        route: Route,
         credentials: Credentials,
         store: &HostKeyStore,
     ) {
@@ -240,11 +256,24 @@ impl TerminalPanel {
             }
             known.as_deref() == Some(fingerprint)
         };
-        let connector = SshConnector::new(
-            SocketAddr::new(address, SSH_PORT).to_string(),
-            credentials.clone(),
-            Arc::new(verifier),
-        );
+        let connector = match &route {
+            Route::Ip(address) => SshConnector::new(
+                SocketAddr::new(*address, SSH_PORT).to_string(),
+                credentials.clone(),
+                Arc::new(verifier),
+            ),
+            Route::Bluetooth(broker) => {
+                let context = ctx.clone();
+                SshConnector::with_dialer(
+                    Arc::new(BluetoothDialer {
+                        broker: broker.clone(),
+                        wake: Arc::new(move || context.request_repaint()),
+                    }),
+                    credentials.clone(),
+                    Arc::new(verifier),
+                )
+            }
+        };
         let size = TerminalSize::new(100, 30).expect("fixed size is not empty");
         let wake_context = ctx.clone();
         let terminal = {
@@ -261,7 +290,7 @@ impl TerminalPanel {
             link: Link::Connecting,
             presented,
             credentials: Some(credentials),
-            address,
+            route,
             selection: None,
             dragged_over: None,
             wheel_rest: 0.0,
@@ -312,7 +341,7 @@ impl TerminalPanel {
             self.start(
                 ui.ctx(),
                 device,
-                question.address,
+                question.route,
                 question.credentials,
                 store,
             );
@@ -354,7 +383,7 @@ impl TerminalPanel {
             };
             ui.label(RichText::new(status).small().color(color));
             ui.label(
-                RichText::new(format!("· {}", running.address))
+                RichText::new(format!("· {}", running.route.describe(lang)))
                     .small()
                     .color(theme::MUTED),
             );
@@ -409,7 +438,7 @@ impl Running {
                         let changed = store.check(device, &fingerprint) == Trust::Changed;
                         Next::HostKey(Box::new(HostKeyQuestion {
                             credentials,
-                            address: self.address,
+                            route: self.route.clone(),
                             fingerprint,
                             changed,
                         }))
@@ -733,12 +762,48 @@ impl Run {
 }
 
 impl super::session::Session {
-    /// The terminal needs an address of the device to reach its `sshd`.
+    /// The terminal needs a way to the device's `sshd`: the tunnel when the device is connected
+    /// over Bluetooth (which is where the network did not work), else its network address.
     pub fn terminal_offered(&self) -> bool {
-        self.terminal_address().is_some()
+        self.terminal_route().is_some()
     }
-    fn terminal_address(&self) -> Option<IpAddr> {
-        self.snapshot.system_info.as_ref()?.ssh_address()
+    fn terminal_route(&self) -> Option<Route> {
+        if self.snapshot.tunnel_available
+            && self.snapshot.transport == Some(zorvinkel_application::setup::Transport::Ble)
+        {
+            return Some(Route::Bluetooth(self.tunnel_broker.clone()));
+        }
+        let address = self.snapshot.system_info.as_ref()?.ssh_address()?;
+        Some(Route::Ip(address))
+    }
+    /// The connector waits for a tunnel and the worker is free to open one.
+    pub fn wants_tunnel(&self) -> bool {
+        !self.tunnel_job && self.is_connected() && self.tunnel_broker.has_asks()
+    }
+    /// Hands the result of an `OpenTunnel` job to the connector that asked.
+    pub fn finish_tunnel(
+        &mut self,
+        result: Result<
+            zorvinkel_application::setup::SetupUpdate,
+            zorvinkel_application::setup::SetupError,
+        >,
+    ) {
+        use super::tunnel_broker::TunnelFailure;
+        use zorvinkel_application::setup::SetupError;
+        self.tunnel_job = false;
+        let answer = match result {
+            Ok(update) => match update.error {
+                None => match update.snapshot.tunnel.take::<tokio::io::DuplexStream>() {
+                    Some(stream) => Ok(Box::new(stream) as Box<dyn zorvinkel_terminal::ByteStream>),
+                    None => Err(TunnelFailure::Unreachable),
+                },
+                Some(SetupError::Busy) => Err(TunnelFailure::Busy),
+                Some(SetupError::Unsupported) => Err(TunnelFailure::NotOffered),
+                Some(_) => Err(TunnelFailure::Unreachable),
+            },
+            Err(_) => Err(TunnelFailure::Unreachable),
+        };
+        self.tunnel_broker.answer(answer);
     }
     pub fn terminal_page(
         &mut self,
@@ -746,9 +811,9 @@ impl super::session::Session {
         lang: Language,
         host_keys: &mut HostKeyStore,
     ) {
-        let address = self.terminal_address();
+        let route = self.terminal_route();
         let panel = self.terminal.get_or_insert_with(TerminalPanel::default);
-        panel.show(ui, lang, &self.handle, address, host_keys);
+        panel.show(ui, lang, &self.handle, route, host_keys);
     }
 }
 
@@ -756,13 +821,13 @@ impl super::session::Session {
 mod tests {
     use super::*;
 
-    fn render(panel: &mut TerminalPanel, address: Option<IpAddr>, lang: Language) {
+    fn render(panel: &mut TerminalPanel, route: Option<Route>, lang: Language) {
         let context = egui::Context::default();
         let mut store = HostKeyStore::none();
         let _ = context.run(egui::RawInput::default(), |context| {
             egui::CentralPanel::default().show(context, |ui| {
                 panel.poll("pi", &store);
-                panel.show(ui, lang, "pi", address, &mut store);
+                panel.show(ui, lang, "pi", route.clone(), &mut store);
             });
         });
     }
@@ -772,7 +837,8 @@ mod tests {
         for lang in Language::ALL {
             let mut panel = TerminalPanel::default();
             render(&mut panel, None, lang);
-            render(&mut panel, "192.168.1.20".parse().ok(), lang);
+            render(&mut panel, "192.168.1.20".parse().ok().map(Route::Ip), lang);
+            render(&mut panel, Some(Route::Bluetooth(Default::default())), lang);
         }
     }
     #[test]
@@ -782,13 +848,17 @@ mod tests {
             let mut panel = TerminalPanel {
                 stage: Stage::HostKey(Box::new(HostKeyQuestion {
                     credentials: credentials.clone(),
-                    address: "192.168.1.20".parse().unwrap(),
+                    route: Route::Bluetooth(Default::default()),
                     fingerprint: "SHA256:abc".into(),
                     changed,
                 })),
                 ..TerminalPanel::default()
             };
-            render(&mut panel, "192.168.1.20".parse().ok(), Language::English);
+            render(
+                &mut panel,
+                "192.168.1.20".parse().ok().map(Route::Ip),
+                Language::English,
+            );
         }
         for ending in [
             Ending::Finished(0),

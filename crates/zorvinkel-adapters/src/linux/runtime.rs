@@ -30,6 +30,7 @@ pub struct RuntimeNetwork {
     services: super::services::ServiceReader,
     service_control: Option<super::services::ServiceControlQueue>,
     ip_endpoint: bool,
+    tunnel: Option<crate::tunnel_gate::TunnelGate>,
 }
 impl zorvinkel_application::device::NetworkStatusSource for RuntimeNetwork {
     fn read_status(&mut self) -> Result<zorvinkel_core::NetworkStatus, PortError> {
@@ -49,6 +50,11 @@ impl zorvinkel_application::device::NetworkStatusSource for RuntimeNetwork {
         self.service_control
             .as_mut()
             .map(|control| control as &mut dyn zorvinkel_application::services::ServiceControl)
+    }
+    fn tunnel_control(&mut self) -> Option<&mut dyn zorvinkel_application::tunnel::TunnelControl> {
+        self.tunnel
+            .as_mut()
+            .map(|gate| gate as &mut dyn zorvinkel_application::tunnel::TunnelControl)
     }
     fn ip_endpoint_available(&self) -> bool {
         self.ip_endpoint
@@ -98,6 +104,7 @@ impl RuntimeState {
                 ),
                 service_control: None,
                 ip_endpoint: false,
+                tunnel: None,
             },
             peers: BTreeMap::new(),
             epoch: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
@@ -195,6 +202,21 @@ impl ServerBackend for NativeBackend {
                 sessions,
             )?)
     }
+    fn tunnel_frame_limit(&mut self, connection: u64, limit: usize) {
+        if let Ok(mut state) = self.0.lock()
+            && let Some(peer) = state.peers.get_mut(&connection)
+        {
+            peer.set_tunnel_frame_limit(limit);
+        }
+    }
+    fn take_tunnel(&mut self, connection: u64) -> Option<crate::security::service::TunnelGrant> {
+        self.0
+            .lock()
+            .ok()?
+            .peers
+            .get_mut(&connection)?
+            .take_tunnel()
+    }
     fn poll(&mut self, now: Duration) -> BleResult<()> {
         self.0
             .lock()
@@ -274,6 +296,8 @@ pub async fn run(
             &requests,
         ));
     }
+    // The terminal over Bluetooth is on by default; the operator switches it off with a file.
+    runtime.network.tunnel = Some(crate::tunnel_gate::TunnelGate::system());
     // Only the selected stack gets a controller; a limitation leaves network setup
     // unavailable (reported through capabilities) without touching the network.
     let mut status_source = StatusSource::WpaCli;

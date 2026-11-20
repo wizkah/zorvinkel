@@ -14,7 +14,7 @@ pub use credentials::{Credentials, InvalidCredentials};
 pub use resume::{ConnectionStatus, Connector, ResumableEvent, ResumableTerminal, RetryPolicy};
 pub use screen::{Screen, TerminalSize};
 pub use session::{
-    ConnectError, EndReason, HostKeyVerifier, SessionClosed, SshConnector, TerminalEvent,
-    TerminalSession,
+    ByteStream, ConnectError, Dialer, Dialing, EndReason, HostKeyVerifier, SessionClosed,
+    SshConnector, TerminalEvent, TerminalSession,
 };
 pub use vt100;

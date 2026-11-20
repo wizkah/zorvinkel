@@ -68,7 +68,7 @@ impl Action {
     /// Discovery belongs to the device list, not to a device.
     fn for_request(request: &SetupRequest) -> Option<Self> {
         Some(match request {
-            SetupRequest::Discover => return None,
+            SetupRequest::Discover | SetupRequest::OpenTunnel => return None,
             SetupRequest::Connect(_) => Self::Connect,
             SetupRequest::Disconnect => Self::Disconnect,
             SetupRequest::Scan => Self::Scan,
@@ -172,6 +172,10 @@ pub struct Session {
     pub auto_renew: bool,
     /// Login, host key question or running terminal; dropped when the device is disconnected.
     pub terminal: Option<super::terminal_page::TerminalPanel>,
+    /// Where the terminal's connector asks for streams of the Bluetooth tunnel.
+    pub tunnel_broker: std::sync::Arc<super::tunnel_broker::TunnelBroker>,
+    /// A tunnel request of the connector is queued or running at the worker.
+    pub tunnel_job: bool,
     outbox: Vec<SetupRequest>,
 }
 
@@ -202,6 +206,8 @@ impl Session {
             error: None,
             auto_renew: true,
             terminal: None,
+            tunnel_broker: Default::default(),
+            tunnel_job: false,
             outbox: Vec::new(),
         }
     }
@@ -453,5 +459,80 @@ mod tests {
         session.submit(SetupRequest::PowerDevice(PowerAction::Restart));
         session.receive(Err(SetupError::Unavailable), false, false);
         assert_eq!(session.state(), ConnectionState::Failed);
+    }
+}
+
+#[cfg(test)]
+mod tunnel_tests {
+    use super::*;
+    use zorvinkel_adapters::simulation::setup::SimulatedSetup;
+    use zorvinkel_application::setup::SetupUpdate;
+
+    fn connected(tunnel: bool, transport: Option<Transport>) -> Session {
+        let mut session = Session::new("simulation:device-1".into(), "Fotobox".into(), false);
+        let mut update = SimulatedSetup::default()
+            .discovered()
+            .handle(SetupRequest::Connect(session.handle.clone()))
+            .unwrap();
+        update.snapshot.tunnel_available = tunnel;
+        update.snapshot.transport = transport;
+        update.snapshot.system_info = None;
+        session.receive(Ok(update), false, false);
+        session
+    }
+    fn update_with_stream(session: &Session) -> SetupUpdate {
+        let mut update = SimulatedSetup::default()
+            .discovered()
+            .handle(SetupRequest::Refresh)
+            .unwrap();
+        update.snapshot.tunnel = session.snapshot.tunnel.clone();
+        update.snapshot.tunnel.put(tokio::io::duplex(64).0);
+        update
+    }
+
+    #[test]
+    fn the_terminal_is_offered_through_the_tunnel_only_over_bluetooth() {
+        assert!(connected(true, Some(Transport::Ble)).terminal_offered());
+        assert!(!connected(true, Some(Transport::Ip)).terminal_offered());
+        assert!(!connected(false, Some(Transport::Ble)).terminal_offered());
+    }
+    #[test]
+    fn a_waiting_connector_makes_the_session_want_a_tunnel_once() {
+        let mut session = connected(true, Some(Transport::Ble));
+        assert!(!session.wants_tunnel());
+        let _answer = session.tunnel_broker.ask_for_test();
+        assert!(session.wants_tunnel());
+        session.tunnel_job = true;
+        assert!(!session.wants_tunnel(), "one job at a time");
+    }
+    #[test]
+    fn the_stream_of_a_finished_job_reaches_the_connector() {
+        let mut session = connected(true, Some(Transport::Ble));
+        let mut answer = session.tunnel_broker.ask_for_test();
+        session.tunnel_job = true;
+        let update = update_with_stream(&session);
+        session.finish_tunnel(Ok(update));
+        assert!(!session.tunnel_job);
+        assert!(matches!(answer.try_recv(), Ok(Ok(_))));
+    }
+    #[test]
+    fn refusals_and_failures_are_told_apart() {
+        use super::super::tunnel_broker::TunnelFailure;
+        for (result, expected) in [
+            (Some(SetupError::Busy), TunnelFailure::Busy),
+            (Some(SetupError::Unsupported), TunnelFailure::NotOffered),
+            (Some(SetupError::Unavailable), TunnelFailure::Unreachable),
+            (None, TunnelFailure::Unreachable),
+        ] {
+            let mut session = connected(true, Some(Transport::Ble));
+            let mut answer = session.tunnel_broker.ask_for_test();
+            let mut update = SimulatedSetup::default()
+                .discovered()
+                .handle(SetupRequest::Refresh)
+                .unwrap();
+            update.error = result;
+            session.finish_tunnel(Ok(update));
+            assert!(matches!(answer.try_recv(), Ok(Err(failure)) if failure == expected));
+        }
     }
 }

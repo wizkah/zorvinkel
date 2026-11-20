@@ -5429,6 +5429,8 @@ dependencies = [
  "tokio",
  "vt100",
  "zeroize",
+ "zorvinkel-adapters",
+ "zorvinkel-protocol",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ pub const BENCH: Profile = Profile {
     service: 0x719e40a0_4a4b_4d75_9c08_a9cbb88f4300,
     write: 0x719e40a0_4a4b_4d75_9c08_a9cbb88f4301,
     notify: 0x719e40a0_4a4b_4d75_9c08_a9cbb88f4302,
+    tunnel: None,
 };
 
 /// Smallest frame the measurements use; the header of the largest message needs 7 bytes.

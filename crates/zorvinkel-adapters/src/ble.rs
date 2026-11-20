@@ -78,18 +78,25 @@ pub struct Profile {
     pub kind: MessageKind,
     pub write: u128,
     pub notify: u128,
+    /// Write and notify characteristics for tunnel frames (ADR-031), when the service has them.
+    pub tunnel: Option<(u128, u128)>,
 }
 pub const PROBE: Profile = Profile {
     kind: MessageKind::Probe,
     service: probe::SERVICE_UUID,
     write: probe::WRITE_UUID,
     notify: probe::NOTIFY_UUID,
+    tunnel: None,
 };
 pub const STATUS: Profile = Profile {
     kind: MessageKind::SecureRecord,
     service: 0x719e40a0_4a4b_4d75_9c08_a9cbb88f4200,
     write: 0x719e40a0_4a4b_4d75_9c08_a9cbb88f4201,
     notify: 0x719e40a0_4a4b_4d75_9c08_a9cbb88f4202,
+    tunnel: Some((
+        0x719e40a0_4a4b_4d75_9c08_a9cbb88f4203,
+        0x719e40a0_4a4b_4d75_9c08_a9cbb88f4204,
+    )),
 };
 
 #[cfg(all(feature = "ble-client", feature = "security"))]

@@ -13,6 +13,7 @@ mod terminal_input;
 mod terminal_mouse;
 mod terminal_page;
 mod theme;
+mod tunnel_broker;
 #[cfg(target_os = "macos")]
 mod window_buttons;
 mod worker;
@@ -191,6 +192,14 @@ impl App {
             for request in session.take_outbox() {
                 self.hub.submit(owner.clone(), request, false);
             }
+            if session.wants_tunnel() {
+                session.tunnel_job = true;
+                self.hub.submit(
+                    Owner::Tunnel(session.handle.clone()),
+                    SetupRequest::OpenTunnel,
+                    true,
+                );
+            }
             let due = now - session.last_refresh > REFRESH_INTERVAL;
             if !self.simulation && session.needs_renewal() && self.hub.is_idle(&owner) {
                 // A new session over the same path; it runs unseen like a refresh.
@@ -218,6 +227,11 @@ impl App {
                 Owner::Discovery => self.finish_search(completed.reply),
                 Owner::Device(handle) => {
                     self.finish_device_request(&handle, completed.background, completed.reply)
+                }
+                Owner::Tunnel(handle) => {
+                    if let Some(session) = self.session_mut(&handle) {
+                        session.finish_tunnel(completed.reply.result);
+                    }
                 }
             }
         }

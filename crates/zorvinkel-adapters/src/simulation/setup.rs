@@ -116,6 +116,7 @@ impl SimulatedSetup {
                 return Ok(());
             }
             SetupRequest::Refresh => return Ok(()),
+            SetupRequest::OpenTunnel => return Err(SetupError::Unsupported),
             _ => (),
         }
         if !self.connected {
@@ -250,6 +251,8 @@ impl SimulatedSetup {
             },
             wifi_available: true,
             power_available: true,
+            tunnel_available: false,
+            tunnel: Default::default(),
             system_info_available: true,
             system_info: Some(zorvinkel_application::system::SystemInfo {
                 version: env!("CARGO_PKG_VERSION").into(),

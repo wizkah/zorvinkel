@@ -36,6 +36,8 @@ pub enum Operation {
     RestartPolicyRead,
     /// Chooses the restart option; completion is followed like other network tasks.
     RestartPolicySet,
+    /// Opens the terminal tunnel to the device's local `sshd` (ADR-031).
+    TunnelOpen,
     Unknown(u16),
 }
 impl Operation {
@@ -61,6 +63,7 @@ impl Operation {
             Self::CorrelationRedeem => 18,
             Self::RestartPolicyRead => 19,
             Self::RestartPolicySet => 20,
+            Self::TunnelOpen => 21,
             Self::Unknown(code) => code,
         }
     }
@@ -100,6 +103,7 @@ pub enum ResponseBody {
     Correlated,
     RestartPolicy(crate::restart::RestartState),
     RestartPolicyStarted(u64),
+    TunnelOpened(crate::tunnel::OpenResponse),
     Error(RemoteError),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,7 +116,7 @@ pub fn encode_request(request: Request) -> Result<Vec<u8>, CodecError> {
     encode_request_payload(request, &[])
 }
 pub fn encode_request_payload(request: Request, payload: &[u8]) -> Result<Vec<u8>, CodecError> {
-    if matches!(request.operation, Operation::Unknown(code) if (1..=20).contains(&code) || code >= 0x8000)
+    if matches!(request.operation, Operation::Unknown(code) if (1..=21).contains(&code) || code >= 0x8000)
     {
         return Err(CodecError::Malformed);
     }
@@ -147,6 +151,9 @@ fn validate_request_payload(operation: Operation, payload: &[u8]) -> Result<(), 
         }
         Operation::RestartPolicySet => {
             crate::restart::read_set(payload)?;
+        }
+        Operation::TunnelOpen => {
+            crate::tunnel::OpenRequest::parse(payload)?;
         }
         _ if !payload.is_empty() => return Err(CodecError::Malformed),
         _ => (),
@@ -183,6 +190,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<Request, CodecError> {
         18 => Operation::CorrelationRedeem,
         19 => Operation::RestartPolicyRead,
         20 => Operation::RestartPolicySet,
+        21 => Operation::TunnelOpen,
         other => Operation::Unknown(other),
     };
     validate_request_payload(operation, payload)?;
@@ -216,6 +224,7 @@ pub fn encode_response(response: &Response) -> Result<Vec<u8>, CodecError> {
         ResponseBody::Correlated => (0x8011, Vec::new()),
         ResponseBody::RestartPolicy(state) => (0x8012, crate::restart::state_payload(*state)),
         ResponseBody::RestartPolicyStarted(id) => (0x8013, crate::wifi::id_payload(*id)?),
+        ResponseBody::TunnelOpened(response) => (0x8014, response.to_bytes()),
         ResponseBody::Error(error) => (
             0xffff,
             vec![match error {
@@ -270,6 +279,7 @@ pub fn decode_response(bytes: &[u8]) -> Result<Response, CodecError> {
         0x8011 if payload.is_empty() => ResponseBody::Correlated,
         0x8012 => ResponseBody::RestartPolicy(crate::restart::read_state(payload)?),
         0x8013 => ResponseBody::RestartPolicyStarted(crate::wifi::read_id(payload)?),
+        0x8014 => ResponseBody::TunnelOpened(crate::tunnel::OpenResponse::parse(payload)?),
         0xffff if payload.len() == 1 => ResponseBody::Error(match payload[0] {
             1 => RemoteError::Unauthorized,
             2 => RemoteError::RegistrationClosed,

@@ -12,6 +12,9 @@ use zorvinkel_application::setup::*;
 pub enum Owner {
     Discovery,
     Device(String),
+    /// A tunnel request of the terminal; runs on the device's worker but is answered to the
+    /// terminal, not to the device tab.
+    Tunnel(String),
 }
 
 /// Creates the backend that serves one device's own connection.
@@ -119,7 +122,8 @@ impl Hub {
         self.factory.is_none()
     }
     fn lane_index(&mut self, owner: &Owner) -> usize {
-        let (Owner::Device(handle), Some(factory)) = (owner, &self.factory) else {
+        let (Owner::Device(handle) | Owner::Tunnel(handle), Some(factory)) = (owner, &self.factory)
+        else {
             return 0;
         };
         if let Some(index) = self.device_lanes.get(handle) {
@@ -134,7 +138,9 @@ impl Hub {
     /// True when nothing of this owner's worker is running or waiting.
     pub fn is_idle(&self, owner: &Owner) -> bool {
         let index = match (owner, &self.factory) {
-            (Owner::Device(handle), Some(_)) => self.device_lanes.get(handle).copied(),
+            (Owner::Device(handle) | Owner::Tunnel(handle), Some(_)) => {
+                self.device_lanes.get(handle).copied()
+            }
             _ => Some(0),
         };
         index.is_none_or(|index| self.lanes[index].idle())

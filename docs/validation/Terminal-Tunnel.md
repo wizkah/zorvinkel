@@ -53,3 +53,29 @@ cargo run --release -p zorvinkel-client --features ble-client,security -- --ble-
 ```
 
 The run takes about eight minutes. After an aborted run the client may still hold the connection; the device then does not advertise until it is closed.
+
+## L2CAP connection-oriented channels instead of GATT (not measured)
+
+**Date:** 2026-11-20. Question: would an LE credit-based channel (L2CAP CoC) beat GATT notifications for the tunnel? It was **not measured**, because the client stack cannot open one:
+
+- `btleplug` 0.13.5 (with the local patches) has no L2CAP API on any platform (no match in `vendor/btleplug`).
+- The Windows bindings in use (`windows` 0.62.2) contain L2CAP only as classic Bluetooth constants and structures (`Win32::Devices::Bluetooth`, `BTHPROTO_L2CAP`); the Bluetooth LE API (`Windows.Devices.Bluetooth`) has no channel type. No other Windows interface for LE channels was looked for beyond these bindings.
+- The device side could do it: `bluer` (vendored) offers L2CAP sockets on Linux. macOS has `CBL2CAPChannel`; neither was tried.
+
+A measurement would need new platform code for the Windows client first, with an unclear outcome. The GATT numbers above stay the basis of ADR-031. Throughput of a CoC is not known to be better: both paths share the connection interval chosen by the central, which dominated the round trip (about 90 ms).
+
+## Tunnel end to end over Bluetooth (first real run)
+
+**Date:** 2026-11-20. Same pair as above (Raspberry Pi 4, Windows 11 with an Intel adapter), regular `zorvinkeld.service` rebuilt with the tunnel, client `zorvinkel-client --ble-tunnel-test <directory> <handle>` over Bluetooth (the network path is skipped on purpose).
+
+- The tunnel opened through the authenticated status session; the device connected to its `sshd` on loopback and the client read the real identification line (`SSH-2.0-OpenSSH_9.2p1 …`) through the encrypted tunnel 31-38 ms after the open, then sent its own line and received 512 bytes of the key exchange within 134-135 ms. Two runs, same picture. The device logged `Tunnel ended: Peer(Normal)` after the client closed.
+- With `/etc/zorvinkel/terminal-disabled` present the device refused with `Unavailable`; removing the file allowed the next run.
+- Not measured: throughput and latency of an interactive SSH session through the tunnel (only about 0.5 KB were transferred), a full SSH login, rekeying on a real link, several clients, the Raspberry Pi Zero W, macOS and Linux centrals, a loss of the radio link during a tunnel. After a failed run the Windows client sometimes needed one more try to connect (known behaviour with a lingering connection).
+
+## SSH session through the tunnel (real run)
+
+**Date:** 2026-11-20. Same pair; `zorvinkel-client --ble-ssh-test <directory> <handle> <user> <key-file>` opens the tunnel over Bluetooth, logs in to the device's `sshd` with a private key through `SshConnector::with_dialer` and attaches to the `tmux` session. The tool accepts any host key.
+
+- The SSH handshake and login took 0.5-0.6 s from the tunnel being open (two runs).
+- 30 single keystrokes, each sent after the screen had been quiet for 400 ms and timed until the echo reached the client: **median 90 ms, 95th percentile 110 ms, maximum 135 ms**. That is one connection-event round trip as measured before; the encryption, the credit window and `tmux` add nothing visible.
+- Not measured: bulk output through the tunnel (`tmux` redraws only the screen, so the test cannot produce a stream), a long session, rekeying on a real link (1024 records per direction), the Raspberry Pi Zero W, other centrals. One earlier attempt right after the previous run failed with "Not connected" (the lingering-connection behaviour noted above).

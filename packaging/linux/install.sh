@@ -57,3 +57,6 @@ else
     echo 'Hinweis: dnsmasq fehlt (apt install dnsmasq-base); "Eigenes WLAN" bleibt deaktiviert.' >&2
 fi
 systemctl enable --now zorvinkeld.service
+# The terminal (ADR-030) needs sshd on the loopback interface and tmux; see packaging/Terminal.md.
+command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ] || echo 'Hinweis: sshd fehlt (apt install openssh-server); das Terminal bleibt nicht verfügbar.' >&2
+command -v tmux >/dev/null 2>&1 || echo 'Hinweis: tmux fehlt (apt install tmux); das Terminal endet sonst mit Status 127.' >&2

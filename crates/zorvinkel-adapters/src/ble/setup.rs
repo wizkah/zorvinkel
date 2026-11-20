@@ -76,6 +76,51 @@ impl NativeSetup {
     pub fn public_key(&self) -> Vec<u8> {
         self.identity.public_key().to_vec()
     }
+    /// The next connection skips the network path and uses Bluetooth, the only carrier of a tunnel.
+    pub fn force_bluetooth(&mut self) {
+        self.force_ble = true;
+    }
+    /// Opens a terminal tunnel over the connected Bluetooth device and returns the client end of
+    /// the stream; SSH runs over it. It lives on this backend's runtime and closes when dropped.
+    pub fn open_tunnel(&mut self) -> BleResult<tokio::io::DuplexStream> {
+        let connection = self.connection.as_mut().ok_or("not connected")?;
+        self.runtime.block_on(connection.open_tunnel())
+    }
+    /// Diagnostic for the tunnel (ADR-031): opens one, reads the identification line `sshd` sends
+    /// first, answers with one and reads the start of the key exchange. Needs no SSH login.
+    pub fn probe_tunnel(&mut self) -> BleResult<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = self.open_tunnel()?;
+        self.runtime.block_on(async move {
+            let started = Instant::now();
+            let limit = Duration::from_secs(15);
+            let mut banner = Vec::new();
+            while !banner.ends_with(
+                b"
+",
+            ) && banner.len() < 255
+            {
+                let mut byte = [0];
+                timeout(limit, stream.read_exact(&mut byte)).await??;
+                banner.push(byte[0]);
+            }
+            let first = started.elapsed();
+            stream
+                .write_all(
+                    b"SSH-2.0-zorvinkel-probe
+",
+                )
+                .await?;
+            let mut exchange = vec![0; 512];
+            timeout(limit, stream.read_exact(&mut exchange)).await??;
+            Ok(format!(
+                "identification {:?} after {first:?}; {} more bytes after {:?}",
+                String::from_utf8_lossy(&banner).trim_end(),
+                exchange.len(),
+                started.elapsed()
+            ))
+        })
+    }
     fn apply(&mut self, request: SetupRequest) -> BleResult<()> {
         self.runtime.block_on(async {
             match request {
@@ -181,6 +226,8 @@ impl NativeSetup {
                         bits & zorvinkel_protocol::wifi::CAP_WIFI_TEMPORARY != 0;
                     self.snapshot.power_available =
                         bits & zorvinkel_protocol::power::CAP_POWER != 0;
+                    self.snapshot.tunnel_available =
+                        bits & zorvinkel_protocol::tunnel::CAP_TUNNEL != 0;
                     self.snapshot.wifi_persistence = None;
                     self.snapshot.system_info_available =
                         bits & zorvinkel_protocol::system::CAP_SYSTEM_INFO != 0;
@@ -645,6 +692,9 @@ async fn prefer_ip(
 }
 impl SetupBackend for NativeSetup {
     fn handle(&mut self, request: SetupRequest) -> Result<SetupUpdate, SetupError> {
+        if matches!(request, SetupRequest::OpenTunnel) {
+            return Ok(self.open_tunnel_update());
+        }
         if let SetupRequest::ReadSavedCredentials { ssid } = &request {
             let result = crate::credentials::SystemCredentialSource.saved_wifi_password(ssid);
             return Ok(SetupUpdate {
@@ -764,6 +814,41 @@ impl SetupBackend for NativeSetup {
             error,
             saved_password: None,
         })
+    }
+}
+impl NativeSetup {
+    /// A refused or failed tunnel is reported in the update; unlike other requests it does not
+    /// end the connection, because the status session itself still works.
+    fn open_tunnel_update(&mut self) -> SetupUpdate {
+        use super::secure_client::TunnelRefused;
+        use zorvinkel_protocol::status::RemoteError;
+        let error = match self.open_tunnel() {
+            Ok(stream) => {
+                self.snapshot.tunnel.put(stream);
+                None
+            }
+            Err(error) => {
+                eprintln!("Tunnel request failed: {error}");
+                Some(
+                    match error
+                        .downcast_ref::<TunnelRefused>()
+                        .map(|refused| refused.0)
+                    {
+                        Some(RemoteError::Busy) => SetupError::Busy,
+                        Some(RemoteError::Unsupported | RemoteError::Unavailable) => {
+                            SetupError::Unsupported
+                        }
+                        _ if self.connection.is_none() => SetupError::Disconnected,
+                        _ => SetupError::Unavailable,
+                    },
+                )
+            }
+        };
+        SetupUpdate {
+            snapshot: self.snapshot.clone(),
+            error,
+            saved_password: None,
+        }
     }
 }
 impl NativeSetup {
@@ -912,6 +997,7 @@ fn reset_device(snapshot: &mut SetupSnapshot) {
     snapshot.status = None;
     snapshot.wifi_available = false;
     snapshot.power_available = false;
+    snapshot.tunnel_available = false;
     snapshot.wifi_persistence = None;
     snapshot.restart_policy = None;
     snapshot.system_info_available = false;

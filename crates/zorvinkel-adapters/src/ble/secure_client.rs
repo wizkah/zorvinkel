@@ -6,7 +6,9 @@ use crate::{
         ChannelContext,
         handshake::{Handshake, Role},
         service::ClientSession,
+        tunnel,
     },
+    tunnel_io::{FrameLink, forward},
 };
 use btleplug::{
     api::{CharPropFlags, Characteristic, Peripheral as _, ValueNotification, WriteType},
@@ -17,12 +19,26 @@ use std::{net::IpAddr, pin::Pin, time::Duration};
 use tokio::{
     io::AsyncWriteExt,
     net::TcpStream,
+    sync::mpsc,
     time::{Instant, timeout},
 };
 use uuid::Uuid;
 use zorvinkel_application::trust::{DeviceTrustStore, check_device, verify_device};
 use zorvinkel_core::trust::{DeviceKey, TrustMode};
-use zorvinkel_protocol::status::{Operation, ResponseBody};
+use zorvinkel_protocol::{
+    status::{Operation, ResponseBody},
+    tunnel::MAX_FRAME,
+};
+
+/// The device answered a tunnel request with an error.
+#[derive(Debug)]
+pub struct TunnelRefused(pub zorvinkel_protocol::status::RemoteError);
+impl std::fmt::Display for TunnelRefused {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "the device refused the tunnel: {:?}", self.0)
+    }
+}
+impl std::error::Error for TunnelRefused {}
 
 type Notifications = Pin<Box<dyn Stream<Item = ValueNotification> + Send>>;
 /// Bluetooth and IP carry the same secured records; only the framing underneath differs.
@@ -33,6 +49,8 @@ enum Link {
         notify: Uuid,
         notifications: Notifications,
         frames: Box<ProbeSession>,
+        /// Write and notify characteristics of the tunnel, when the device has them.
+        tunnel: Option<(Characteristic, Characteristic)>,
     },
     Ip(TcpStream),
 }
@@ -106,6 +124,12 @@ impl StatusConnection {
             .ok_or("status write characteristic missing")?;
         let notify = find(STATUS.notify, CharPropFlags::NOTIFY)
             .ok_or("status notification characteristic missing")?;
+        let tunnel = STATUS.tunnel.and_then(|(write, notify)| {
+            Some((
+                find(write, CharPropFlags::WRITE_WITHOUT_RESPONSE)?,
+                find(notify, CharPropFlags::NOTIFY)?,
+            ))
+        });
         let notifications = peripheral.notifications().await?;
         timeout(Duration::from_secs(5), peripheral.subscribe(&notify))
             .await
@@ -118,6 +142,7 @@ impl StatusConnection {
                 notify: notify.uuid,
                 notifications,
                 frames: Box::new(ProbeSession::with_kind(STATUS.kind)),
+                tunnel,
             },
             started: Instant::now(),
             session: None,
@@ -248,6 +273,81 @@ impl StatusConnection {
             .ok_or("session closed")?
             .receive(&record, self.started.elapsed())?
             .body)
+    }
+    /// Opens a terminal tunnel to the device's `sshd` over this Bluetooth connection (ADR-031)
+    /// and returns its client end: SSH runs over the returned stream. The connection must stay
+    /// open while the stream is in use; dropping the stream closes the tunnel.
+    pub async fn open_tunnel(&mut self) -> BleResult<tokio::io::DuplexStream> {
+        let Link::Ble {
+            peripheral, tunnel, ..
+        } = &self.link
+        else {
+            return Err("a tunnel needs a Bluetooth connection".into());
+        };
+        let (write, notify) = tunnel
+            .clone()
+            .ok_or("the device offers no tunnel characteristics")?;
+        let peripheral = peripheral.clone();
+        let mut notifications = peripheral.notifications().await?;
+        timeout(Duration::from_secs(5), peripheral.subscribe(&notify))
+            .await
+            .map_err(|_| "tunnel subscription timed out")?
+            .map_err(|error| format!("tunnel subscription failed: {error}"))?;
+        let (pending, open) = tunnel::request(MAX_FRAME as u16)?;
+        let response = match self
+            .request_payload(Operation::TunnelOpen, &open.to_bytes())
+            .await?
+        {
+            ResponseBody::TunnelOpened(response) => response,
+            ResponseBody::Error(error) => return Err(TunnelRefused(error).into()),
+            _ => return Err("unexpected response to the tunnel request".into()),
+        };
+        let started = self.started;
+        let cipher = pending.finish(
+            &response,
+            started.elapsed(),
+            crate::security::service::TUNNEL_LIFETIME,
+        )?;
+        let (to_device, mut outgoing) = mpsc::channel::<Vec<u8>>(64);
+        let (to_tunnel, incoming) = mpsc::channel::<Vec<u8>>(64);
+        let notify_uuid = notify.uuid;
+        tokio::spawn(async move {
+            while let Some(notification) = notifications.next().await {
+                if notification.uuid == notify_uuid
+                    && to_tunnel.send(notification.value).await.is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let writer = peripheral.clone();
+        tokio::spawn(async move {
+            while let Some(frame) = outgoing.recv().await {
+                // Without response: one frame per connection event instead of one per round
+                // trip; the credit window bounds what is in flight.
+                if writer
+                    .write(&write, &frame, WriteType::WithoutResponse)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            let _ = writer.unsubscribe(&notify).await;
+        });
+        let (stream, tunnel_end) = tokio::io::duplex(16 * 1024);
+        tokio::spawn(forward(
+            cipher,
+            response.window,
+            FrameLink {
+                incoming,
+                outgoing: to_device,
+            },
+            tunnel_end,
+            move || started.elapsed(),
+            || true,
+        ));
+        Ok(stream)
     }
     pub async fn close(&mut self) {
         if let Some(mut session) = self.session.take() {

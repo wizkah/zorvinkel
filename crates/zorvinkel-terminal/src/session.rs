@@ -4,8 +4,13 @@ use russh::{
     client::{self, Handle},
     keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate},
 };
-use std::{fmt, future::Future, sync::Arc, time::Duration};
-use tokio::{net::lookup_host, sync::mpsc, time::timeout};
+use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::lookup_host,
+    sync::mpsc,
+    time::timeout,
+};
 
 /// Attaches to the session `zorvinkel`, creating it when missing (ADR-030).
 /// Mouse mode lets the wheel scroll through the history of `tmux`, which owns the screen.
@@ -112,10 +117,26 @@ impl TerminalSession {
     }
 }
 
+/// A byte stream the SSH connection can run over: a TCP socket, or the Bluetooth tunnel.
+pub trait ByteStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> ByteStream for T {}
+
+/// Opens a new transport to the device for each connection attempt (ADR-031): reconnecting
+/// after a loss needs a fresh tunnel, because a tunnel does not move between transports.
+/// The future a [`Dialer`] returns.
+pub type Dialing<'a> =
+    Pin<Box<dyn Future<Output = Result<Box<dyn ByteStream>, ConnectError>> + Send + 'a>>;
+
+pub trait Dialer: Send + Sync {
+    fn dial(&self) -> Dialing<'_>;
+}
+
 /// Connects to the device's `sshd` (ADR-030). A password is used once to deposit an ephemeral
 /// session key (ADR-032); reconnects and the final cleanup use that key.
 pub struct SshConnector {
     address: String,
+    /// Replaces the TCP connection to `address` when set.
+    dialer: Option<Arc<dyn Dialer>>,
     credentials: Credentials,
     verifier: Arc<dyn HostKeyVerifier>,
     /// Set once a session key has been deposited on the device and not yet removed.
@@ -130,6 +151,21 @@ impl SshConnector {
     ) -> Self {
         Self {
             address: address.into(),
+            dialer: None,
+            credentials,
+            verifier,
+            deposited: None,
+        }
+    }
+    /// Connects over streams the `dialer` opens instead of a TCP connection.
+    pub fn with_dialer(
+        dialer: Arc<dyn Dialer>,
+        credentials: Credentials,
+        verifier: Arc<dyn HostKeyVerifier>,
+    ) -> Self {
+        Self {
+            address: String::new(),
+            dialer: Some(dialer),
             credentials,
             verifier,
             deposited: None,
@@ -184,11 +220,6 @@ impl SshConnector {
         let _ = timeout(CLEANUP_TIMEOUT, cleanup).await;
     }
     async fn authenticated_handle(&self) -> Result<Handle<TrustHandler>, ConnectError> {
-        let address = lookup_host(&self.address)
-            .await
-            .map_err(|error| ConnectError::Network(error.to_string()))?
-            .next()
-            .ok_or_else(|| ConnectError::Network("address not found".into()))?;
         let config = Arc::new(client::Config {
             keepalive_interval: Some(KEEPALIVE_INTERVAL),
             keepalive_max: KEEPALIVE_MAX_MISSED,
@@ -198,13 +229,15 @@ impl SshConnector {
         let handler = TrustHandler {
             verifier: self.verifier.clone(),
         };
-        let mut handle = match timeout(CONNECT_TIMEOUT, client::connect(config, address, handler))
-            .await
-        {
+        let connecting = self.start_connection(config, handler);
+        let mut handle = match timeout(CONNECT_TIMEOUT, connecting).await {
             Err(_) => return Err(ConnectError::Network("timed out".into())),
             Ok(Ok(handle)) => handle,
-            Ok(Err(HandlerError::HostKeyRejected)) => return Err(ConnectError::HostKeyRejected),
-            Ok(Err(HandlerError::Ssh(error))) => {
+            Ok(Err(HandlerErrorOr::Connect(error))) => return Err(error),
+            Ok(Err(HandlerErrorOr::Handler(HandlerError::HostKeyRejected))) => {
+                return Err(ConnectError::HostKeyRejected);
+            }
+            Ok(Err(HandlerErrorOr::Handler(HandlerError::Ssh(error)))) => {
                 return Err(ConnectError::Network(error.to_string()));
             }
         };
@@ -218,6 +251,35 @@ impl SshConnector {
             Err(error) => Err(ConnectError::Network(error.to_string())),
         }
     }
+}
+impl SshConnector {
+    /// The SSH handshake over a TCP connection or a stream from the dialer.
+    async fn start_connection(
+        &self,
+        config: Arc<client::Config>,
+        handler: TrustHandler,
+    ) -> Result<Handle<TrustHandler>, HandlerErrorOr> {
+        if let Some(dialer) = &self.dialer {
+            let stream = dialer.dial().await.map_err(HandlerErrorOr::Connect)?;
+            return client::connect_stream(config, stream, handler)
+                .await
+                .map_err(HandlerErrorOr::Handler);
+        }
+        let address = lookup_host(&self.address)
+            .await
+            .map_err(|error| HandlerErrorOr::Connect(ConnectError::Network(error.to_string())))?
+            .next()
+            .ok_or_else(|| {
+                HandlerErrorOr::Connect(ConnectError::Network("address not found".into()))
+            })?;
+        client::connect(config, address, handler)
+            .await
+            .map_err(HandlerErrorOr::Handler)
+    }
+}
+enum HandlerErrorOr {
+    Connect(ConnectError),
+    Handler(HandlerError),
 }
 impl SshConnector {
     async fn authenticate(
