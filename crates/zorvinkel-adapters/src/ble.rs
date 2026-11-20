@@ -5,6 +5,7 @@ use zorvinkel_protocol::{
     probe,
 };
 
+pub mod bench;
 #[cfg(feature = "ble-client")]
 pub mod client;
 #[cfg(all(feature = "ble-server", target_os = "linux"))]

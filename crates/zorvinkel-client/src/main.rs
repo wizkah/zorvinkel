@@ -143,9 +143,13 @@ fn main() -> ExitCode {
     if arguments.first().map(String::as_str) == Some("--ble-probe") {
         return run_ble_probe(&arguments[1..]);
     }
+    #[cfg(feature = "ble-client")]
+    if arguments.first().map(String::as_str) == Some("--ble-bench") {
+        return run_ble_bench(&arguments[1..]);
+    }
     if arguments != ["--simulate"] {
         eprintln!(
-            "Usage: zorvinkel-client --simulate | --secure-simulate | --simulate-gui [device-count] | --ble-probe [handle] | --device-status directory [handle] | --device-gui directory | --client-key directory | --trust-device directory handle key-hex (native commands require matching features; persistent native storage requires Unix)"
+            "Usage: zorvinkel-client --simulate | --secure-simulate | --simulate-gui [device-count] | --ble-probe [handle] | --ble-bench [handle] | --device-status directory [handle] | --device-gui directory | --client-key directory | --trust-device directory handle key-hex (native commands require matching features; persistent native storage requires Unix)"
         );
         return ExitCode::FAILURE;
     }
@@ -278,6 +282,28 @@ fn native_status(arguments: &[String]) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("Device status failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Radio measurement against `zorvinkeld --ble-bench` (ADR-031): sizes, latency, throughput.
+#[cfg(feature = "ble-client")]
+fn run_ble_bench(arguments: &[String]) -> ExitCode {
+    if arguments.len() > 1 {
+        eprintln!("Usage: zorvinkel-client --ble-bench [device-handle]");
+        return ExitCode::FAILURE;
+    }
+    let result = (|| {
+        let runtime = tokio::runtime::Runtime::new()?;
+        runtime.block_on(zorvinkel_adapters::ble::bench::run_bench(
+            arguments.first().map(String::as_str),
+        ))
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("BLE bench failed: {error}");
             ExitCode::FAILURE
         }
     }
