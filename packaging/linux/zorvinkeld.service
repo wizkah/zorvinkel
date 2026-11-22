@@ -1,9 +1,9 @@
 [Unit]
 Description=Zorvinkel secure BLE status
 BindsTo=bluetooth.service
-After=bluetooth.service dbus.service
-StartLimitIntervalSec=60
-StartLimitBurst=5
+After=bluetooth.service dbus.service NetworkManager.service
+StartLimitIntervalSec=300
+StartLimitBurst=20
 
 [Service]
 Type=simple
