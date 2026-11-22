@@ -50,7 +50,7 @@ enum Link {
         notifications: Notifications,
         frames: Box<ProbeSession>,
         /// Write and notify characteristics of the tunnel, when the device has them.
-        tunnel: Option<(Characteristic, Characteristic)>,
+        tunnel: Box<Option<(Characteristic, Characteristic)>>,
     },
     Ip(TcpStream),
 }
@@ -124,12 +124,12 @@ impl StatusConnection {
             .ok_or("status write characteristic missing")?;
         let notify = find(STATUS.notify, CharPropFlags::NOTIFY)
             .ok_or("status notification characteristic missing")?;
-        let tunnel = STATUS.tunnel.and_then(|(write, notify)| {
+        let tunnel = Box::new(STATUS.tunnel.and_then(|(write, notify)| {
             Some((
                 find(write, CharPropFlags::WRITE_WITHOUT_RESPONSE)?,
                 find(notify, CharPropFlags::NOTIFY)?,
             ))
-        });
+        }));
         let notifications = peripheral.notifications().await?;
         timeout(Duration::from_secs(5), peripheral.subscribe(&notify))
             .await
@@ -284,7 +284,7 @@ impl StatusConnection {
         else {
             return Err("a tunnel needs a Bluetooth connection".into());
         };
-        let (write, notify) = tunnel
+        let (write, notify) = (**tunnel)
             .clone()
             .ok_or("the device offers no tunnel characteristics")?;
         let peripheral = peripheral.clone();

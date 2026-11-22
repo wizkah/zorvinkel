@@ -1345,7 +1345,7 @@ mod tests {
     fn the_comparison_and_the_revert_follow_what_applies_after_a_restart() {
         let mut rig = Rig::new("differs");
         let flag = AtomicBool::new(false);
-        let mut differs = |rig: &mut Rig| {
+        let differs = |rig: &mut Rig| {
             publish_differs(&mut rig.fake, &mut rig.store, &flag);
             flag.load(Ordering::SeqCst)
         };
