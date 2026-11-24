@@ -4,7 +4,7 @@ use super::{
     session::{Session, WifiMode},
     theme,
 };
-use eframe::egui::{self, Color32};
+use eframe::egui::{self, Color32, RichText};
 use zorvinkel_adapters::simulation::setup::DEMO_WIFI_PASSWORD;
 use zorvinkel_application::{power::PowerAction, setup::*};
 
@@ -41,7 +41,7 @@ impl Session {
                 ],
             );
             self.wifi_mode = Some(mode);
-            ui.add_space(8.0);
+            ui.add_space(theme::space::M);
         }
         match mode {
             WifiMode::Join => self.wifi(ui, lang),
@@ -51,49 +51,49 @@ impl Session {
     }
     fn wifi(&mut self, ui: &mut egui::Ui, lang: Language) {
         ui.label(lang.t(Text::ChooseNetwork));
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            for name in self.snapshot.networks.clone() {
-                if ui.selectable_label(self.ssid == name, &name).clicked() {
-                    self.ssid = name;
-                    self.password.clear();
+        if !self.snapshot.networks.is_empty() {
+            theme::choice_list(ui, |ui| {
+                for name in self.snapshot.networks.clone() {
+                    if theme::list_row(ui, self.ssid == name, &name).clicked() {
+                        self.ssid = name;
+                        self.password.clear();
+                    }
                 }
-            }
-        });
+            });
+        }
         if self.action_button(ui, egui::Button::new(lang.t(Text::RefreshNetworks))) {
             self.submit(SetupRequest::Scan);
         }
+        ui.add_space(theme::space::S);
         ui.separator();
+        ui.add_space(theme::space::S);
         ui.label(lang.t(Text::WifiName));
         ui.add(
-            egui::TextEdit::singleline(&mut self.ssid)
+            theme::text_field(egui::TextEdit::singleline(&mut self.ssid))
                 .char_limit(32)
-                .desired_width(ui.available_width().min(420.0)),
+                .desired_width(ui.available_width().min(theme::size::FIELD_WIDTH)),
         );
         ui.label(lang.t(Text::Password));
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.password)
-                    .char_limit(63)
-                    .password(!self.show_wifi_password)
-                    .desired_width((ui.available_width() - 36.0).clamp(0.0, 384.0)),
-            );
-            visibility_toggle(ui, &mut self.show_wifi_password, lang);
-        });
-        ui.horizontal_wrapped(|ui| {
-            if self.action_button(ui, egui::Button::new(lang.t(Text::GetSystemPassword))) {
-                self.submit(SetupRequest::ReadSavedCredentials {
-                    ssid: self.ssid.clone(),
-                });
-            }
-        });
-        if self.simulation {
-            ui.small(lang.format(Text::DemoPassword, &[&DEMO_WIFI_PASSWORD]));
-            ui.small(lang.t(Text::DemoWrongPassword));
-        } else {
-            ui.small(lang.t(Text::Wpa2Supported));
+        password_field(
+            ui,
+            egui::TextEdit::singleline(&mut self.password)
+                .char_limit(63)
+                .password(!self.show_wifi_password),
+            &mut self.show_wifi_password,
+            lang,
+        );
+        if self.action_button(ui, egui::Button::new(lang.t(Text::GetSystemPassword))) {
+            self.submit(SetupRequest::ReadSavedCredentials {
+                ssid: self.ssid.clone(),
+            });
         }
-        ui.add_space(8.0);
+        if self.simulation {
+            hint(ui, &lang.format(Text::DemoPassword, &[&DEMO_WIFI_PASSWORD]));
+            hint(ui, lang.t(Text::DemoWrongPassword));
+        } else {
+            hint(ui, lang.t(Text::Wpa2Supported));
+        }
+        ui.add_space(theme::space::M);
         if self.action_button(ui, theme::primary_button(lang.t(Text::JoinWifi))) {
             let password = std::mem::take(&mut self.password);
             self.submit(SetupRequest::ConnectWifi {
@@ -109,7 +109,7 @@ impl Session {
         if !self.snapshot.restart_differs {
             return;
         }
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
         let mut request = None;
         ui.horizontal(|ui| {
             let idle = self.active_action.is_none();
@@ -135,7 +135,7 @@ impl Session {
     fn access_point(&mut self, ui: &mut egui::Ui, lang: Language) {
         ui.label(lang.t(Text::AccessPointIntro));
         let Some(stored) = self.snapshot.access_point.clone() else {
-            ui.add_space(8.0);
+            ui.add_space(theme::space::S);
             ui.label(lang.t(Text::AccessPointNoCredentials));
             self.access_point_fields(ui, lang);
             return;
@@ -146,22 +146,26 @@ impl Session {
                 zorvinkel_core::NetworkStatus::AccessPointActive { .. }
             )
         });
-        ui.add_space(8.0);
-        ui.label(lang.t(if active {
-            Text::AccessPointOn
+        let (state, color) = if active {
+            (Text::AccessPointOn, theme::SUCCESS)
         } else {
-            Text::AccessPointOff
-        }));
-        ui.add_space(8.0);
+            (Text::AccessPointOff, theme::TEXT_MUTED)
+        };
+        ui.label(RichText::new(lang.t(state)).color(color));
+        ui.add_space(theme::space::S);
         self.access_point_fields(ui, lang);
         let valid = validate_access_point(&self.ap_ssid, &self.ap_password).is_ok();
         let changed = self.ap_ssid != stored.ssid || self.ap_password != stored.password;
         if !valid {
-            ui.small(lang.t(Text::AccessPointInvalid));
+            ui.label(
+                RichText::new(lang.t(Text::AccessPointInvalid))
+                    .small()
+                    .color(theme::DANGER),
+            );
         } else if self.snapshot.access_point_proposed && !active {
-            ui.small(lang.t(Text::AccessPointProposal));
+            hint(ui, lang.t(Text::AccessPointProposal));
         }
-        ui.add_space(8.0);
+        ui.add_space(theme::space::M);
         ui.horizontal_wrapped(|ui| {
             let settings = AccessPointSettings {
                 ssid: self.ap_ssid.clone(),
@@ -193,16 +197,21 @@ impl Session {
         });
         // The code shows what the device reports, so it only appears once the network stands.
         if active {
+            ui.add_space(theme::space::S);
             ui.separator();
+            ui.add_space(theme::space::S);
             ui.horizontal(|ui| {
                 draw_qr(ui, &wifi_qr(&stored), 190.0, lang);
+                ui.add_space(theme::space::S);
                 ui.vertical(|ui| {
-                    ui.label(lang.t(Text::WifiName));
-                    ui.strong(&stored.ssid);
-                    ui.label(lang.t(Text::Password));
-                    ui.monospace(&stored.password);
-                    ui.add_space(4.0);
-                    ui.small(lang.t(Text::ScanToJoin));
+                    theme::label_value(ui, lang.t(Text::WifiName), RichText::new(&stored.ssid));
+                    theme::label_value(
+                        ui,
+                        lang.t(Text::Password),
+                        RichText::new(&stored.password).monospace(),
+                    );
+                    ui.add_space(theme::space::XS);
+                    hint(ui, lang.t(Text::ScanToJoin));
                 });
             });
         }
@@ -210,26 +219,25 @@ impl Session {
     fn access_point_fields(&mut self, ui: &mut egui::Ui, lang: Language) {
         ui.label(lang.t(Text::WifiName));
         ui.add(
-            egui::TextEdit::singleline(&mut self.ap_ssid)
+            theme::text_field(egui::TextEdit::singleline(&mut self.ap_ssid))
                 .char_limit(32)
-                .desired_width(ui.available_width().min(420.0)),
+                .desired_width(ui.available_width().min(theme::size::FIELD_WIDTH)),
         );
         ui.label(lang.t(Text::Password));
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.ap_password)
-                    .char_limit(63)
-                    .password(!self.show_ap_password)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_width((ui.available_width() - 40.0).min(420.0)),
-            );
-            visibility_toggle(ui, &mut self.show_ap_password, lang);
-        });
+        password_field(
+            ui,
+            egui::TextEdit::singleline(&mut self.ap_password)
+                .char_limit(63)
+                .password(!self.show_ap_password)
+                .font(egui::TextStyle::Monospace),
+            &mut self.show_ap_password,
+            lang,
+        );
     }
     pub fn power(&mut self, ui: &mut egui::Ui, lang: Language) {
-        ui.heading(lang.t(Text::PowerHeading));
+        theme::section_title(ui, lang.t(Text::PowerHeading));
         ui.label(lang.t(Text::PowerEndsConnection));
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
         let Some(action) = self.confirm_power else {
             ui.horizontal_wrapped(|ui| {
                 if self.action_button(ui, egui::Button::new(lang.t(Text::Restart))) {
@@ -247,7 +255,7 @@ impl Session {
         };
         ui.label(lang.t(question));
         ui.horizontal_wrapped(|ui| {
-            if self.action_button(ui, theme::primary_button(lang.t(confirm))) {
+            if self.action_button(ui, theme::danger_button(lang.t(confirm))) {
                 self.confirm_power = None;
                 self.submit(SetupRequest::PowerDevice(action));
             }
@@ -276,10 +284,29 @@ fn wifi_qr(ap: &AccessPointSettings) -> String {
         escape(&ap.password)
     )
 }
-/// Small eye button that toggles password visibility. The icon is painted
+/// A hint below a field or an action.
+pub(super) fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(RichText::new(text).small().color(theme::TEXT_MUTED)).wrap());
+}
+
+/// Password field with the eye button beside it; both together are as wide as a plain field.
+fn password_field(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, visible: &mut bool, lang: Language) {
+    ui.horizontal(|ui| {
+        let width = ui.available_width().min(theme::size::FIELD_WIDTH)
+            - theme::size::CONTROL_HEIGHT
+            - ui.spacing().item_spacing.x;
+        ui.add(theme::text_field(edit).desired_width(width.max(0.0)));
+        visibility_toggle(ui, visible, lang);
+    });
+}
+
+/// Square eye button that toggles password visibility. The icon is painted
 /// because the bundled egui fonts have no eye glyph.
 fn visibility_toggle(ui: &mut egui::Ui, visible: &mut bool, lang: Language) {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(theme::size::CONTROL_HEIGHT, theme::size::CONTROL_HEIGHT),
+        egui::Sense::click(),
+    );
     if response.clicked() {
         *visible = !*visible;
     }
@@ -291,7 +318,13 @@ fn visibility_toggle(ui: &mut egui::Ui, visible: &mut bool, lang: Language) {
     let response = response.on_hover_text(lang.t(hint));
     let style = ui.style().interact(&response);
     let painter = ui.painter();
-    painter.rect_filled(rect, style.corner_radius, style.weak_bg_fill);
+    painter.rect(
+        rect,
+        style.corner_radius,
+        style.weak_bg_fill,
+        style.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
 
     let center = rect.center();
     let (half_width, half_height) = (8.0, 4.5);

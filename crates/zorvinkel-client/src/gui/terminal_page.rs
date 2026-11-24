@@ -198,10 +198,10 @@ impl TerminalPanel {
         store: &HostKeyStore,
     ) {
         ui.label(lang.t(Text::TerminalIntro));
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
         if let Some(notice) = self.notice {
-            theme::message(ui, lang.t(notice), theme::ERROR, theme::ERROR_PALE);
-            ui.add_space(8.0);
+            theme::message(ui, lang.t(notice), theme::DANGER, theme::DANGER_SUBTLE);
+            ui.add_space(theme::space::S);
         }
         let Some(route) = route else {
             ui.label(lang.t(Text::TerminalNoAddress));
@@ -213,25 +213,22 @@ impl TerminalPanel {
         {
             self.user.clone_from(&easy.user);
         }
-        egui::Grid::new("terminal_login")
-            .num_columns(2)
-            .spacing([12.0, 8.0])
-            .show(ui, |ui| {
-                ui.label(lang.t(Text::TerminalUser));
-                ui.text_edit_singleline(&mut self.user);
-                ui.end_row();
-                ui.label(lang.t(Text::TerminalPassword));
-                ui.add(egui::TextEdit::singleline(&mut *self.password).password(true));
-                ui.end_row();
-            });
+        let width = ui.available_width().min(theme::size::FIELD_WIDTH);
+        ui.label(lang.t(Text::TerminalUser));
+        ui.add(theme::text_field(egui::TextEdit::singleline(&mut self.user)).desired_width(width));
+        ui.label(lang.t(Text::TerminalPassword));
+        ui.add(
+            theme::text_field(egui::TextEdit::singleline(&mut *self.password).password(true))
+                .desired_width(width),
+        );
         if easy
             .as_ref()
             .is_some_and(|easy| easy.user == self.user.trim())
         {
-            ui.add_space(4.0);
-            ui.small(lang.t(Text::TerminalEasyLoginActive));
+            ui.add_space(theme::space::XS);
+            super::pages::hint(ui, lang.t(Text::TerminalEasyLoginActive));
         }
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
         let ready = !self.user.trim().is_empty();
         let open = ui.add_enabled(ready, theme::primary_button(lang.t(Text::TerminalOpen)));
         if open.clicked() {
@@ -345,17 +342,23 @@ impl TerminalPanel {
             (Text::TerminalHostKeyNew, Text::TerminalTrustKey)
         };
         let color = if question.changed {
-            theme::ERROR
+            theme::DANGER
         } else {
-            theme::AMBER
+            theme::WARNING
         };
         ui.label(RichText::new(lang.t(text)).color(color));
-        ui.add_space(6.0);
+        ui.add_space(theme::space::S);
         ui.label(RichText::new(&question.fingerprint).monospace().strong());
-        ui.add_space(10.0);
+        ui.add_space(theme::space::M);
         let mut decision = None;
+        // Replacing a key the user trusted before is the risky choice; a new key is the normal one.
+        let accept_button = if question.changed {
+            theme::danger_button(lang.t(accept))
+        } else {
+            theme::primary_button(lang.t(accept))
+        };
         ui.horizontal(|ui| {
-            if ui.add(theme::primary_button(lang.t(accept))).clicked() {
+            if ui.add(accept_button).clicked() {
                 decision = Some(true);
             }
             if ui.button(lang.t(Text::TerminalCancel)).clicked() {
@@ -386,13 +389,16 @@ impl TerminalPanel {
         };
         let (text, color) = match ending {
             Ending::Finished(COMMAND_NOT_FOUND) => {
-                (lang.t(Text::TerminalTmuxMissing).to_owned(), theme::ERROR)
+                (lang.t(Text::TerminalTmuxMissing).to_owned(), theme::DANGER)
             }
-            Ending::Finished(code) => (lang.format(Text::TerminalFinished, &[code]), theme::MUTED),
-            Ending::Failed(reason) => (lang.format(Text::TerminalFailed, &[reason]), theme::ERROR),
+            Ending::Finished(code) => (
+                lang.format(Text::TerminalFinished, &[code]),
+                theme::TEXT_MUTED,
+            ),
+            Ending::Failed(reason) => (lang.format(Text::TerminalFailed, &[reason]), theme::DANGER),
         };
         ui.label(RichText::new(text).color(color));
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
         if ui.button(lang.t(Text::TerminalOpenAgain)).clicked() {
             self.stage = Stage::Login;
         }
@@ -417,20 +423,20 @@ impl TerminalPanel {
                 Link::Reconnecting(attempt) => lang.format(Text::TerminalReconnecting, &[&attempt]),
             };
             let color = match running.link {
-                Link::Connected => theme::GREEN,
-                _ => theme::AMBER,
+                Link::Connected => theme::SUCCESS,
+                _ => theme::WARNING,
             };
             ui.label(RichText::new(status).small().color(color));
             ui.label(
                 RichText::new(format!("· {}", running.route.describe(lang)))
                     .small()
-                    .color(theme::MUTED),
+                    .color(theme::TEXT_MUTED),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 close = ui.button(lang.t(Text::TerminalClose)).clicked();
                 // Only a logged-in user can keep or drop the key of the easy login.
                 if running.ever_connected {
-                    ui.add_space(8.0);
+                    ui.add_space(theme::space::S);
                     let mut on = running.easy;
                     let switch = theme::switch(ui, &mut on, lang.t(Text::TerminalEasyLogin));
                     if switch
@@ -449,10 +455,10 @@ impl TerminalPanel {
             ui.label(
                 RichText::new(lang.t(Text::TerminalEasyLoginNotSaved))
                     .small()
-                    .color(theme::ERROR),
+                    .color(theme::DANGER),
             );
         }
-        ui.add_space(6.0);
+        ui.add_space(theme::space::S);
         // The terminal appears with the first successful login, not while connecting.
         if running.ever_connected {
             running.draw(ui);

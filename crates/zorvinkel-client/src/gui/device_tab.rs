@@ -11,10 +11,10 @@ use zorvinkel_core::IpReachability;
 
 pub fn state_color(state: ConnectionState) -> egui::Color32 {
     match state {
-        ConnectionState::Connected => theme::GREEN,
-        ConnectionState::Working(_) => theme::AMBER,
-        ConnectionState::Failed => theme::ERROR,
-        ConnectionState::Disconnected | ConnectionState::OutOfRange => theme::MUTED,
+        ConnectionState::Connected => theme::SUCCESS,
+        ConnectionState::Working(_) => theme::WARNING,
+        ConnectionState::Failed => theme::DANGER,
+        ConnectionState::Disconnected | ConnectionState::OutOfRange => theme::TEXT_MUTED,
     }
 }
 pub fn state_text(state: ConnectionState) -> Text {
@@ -29,7 +29,7 @@ pub fn state_text(state: ConnectionState) -> Text {
 /// State dot, text and a spinner while a request runs.
 pub fn state_label(ui: &mut egui::Ui, state: ConnectionState, lang: Language) {
     if matches!(state, ConnectionState::Working(_)) {
-        ui.add(egui::Spinner::new().size(12.0).color(theme::AMBER));
+        ui.add(egui::Spinner::new().size(12.0).color(theme::WARNING));
     } else {
         theme::status_dot(ui, state_color(state));
     }
@@ -43,18 +43,23 @@ impl Session {
         }
         self.header(ui, lang);
         if let Some(error) = self.error {
-            ui.add_space(8.0);
+            ui.add_space(theme::space::S);
             theme::message(
                 ui,
                 lang.t(error_text(error)),
-                theme::ERROR,
-                theme::ERROR_PALE,
+                theme::DANGER,
+                theme::DANGER_SUBTLE,
             );
         } else if let Some(notice) = self.notice {
-            ui.add_space(8.0);
-            theme::message(ui, lang.t(notice.text()), theme::BLUE, theme::BLUE_PALE);
+            ui.add_space(theme::space::S);
+            theme::message(
+                ui,
+                lang.t(notice.text()),
+                theme::ACCENT,
+                theme::ACCENT_SUBTLE,
+            );
         }
-        ui.add_space(12.0);
+        ui.add_space(theme::space::L);
         if !self.is_connected() {
             return;
         }
@@ -80,7 +85,7 @@ impl Session {
                 ui.label(
                     RichText::new(format!("· {}", lang.t(path)))
                         .small()
-                        .color(theme::MUTED),
+                        .color(theme::TEXT_MUTED),
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -126,28 +131,39 @@ impl Session {
         }
         ui.add_enabled_ui(self.active_action.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = theme::space::XS;
+                fn page_tab(ui: &mut egui::Ui, current: &mut Page, page: Page, label: &str) {
+                    if theme::page_tab(ui, *current == page, label).clicked() {
+                        *current = page;
+                    }
+                }
                 if wifi_offered {
-                    ui.selectable_value(&mut self.page, Page::Wifi, lang.t(Text::PageWifi));
+                    page_tab(ui, &mut self.page, Page::Wifi, lang.t(Text::PageWifi));
                 }
                 if system_offered {
-                    ui.selectable_value(&mut self.page, Page::System, lang.t(Text::PageSystem));
+                    page_tab(ui, &mut self.page, Page::System, lang.t(Text::PageSystem));
                 }
                 for group in &groups {
                     let selected = self.page == Page::Services && &self.service_group == group;
-                    if ui.selectable_label(selected, group).clicked() {
+                    if theme::page_tab(ui, selected, group).clicked() {
                         self.page = Page::Services;
                         self.service_group = group.clone();
                     }
                 }
                 if self.snapshot.power_available {
-                    ui.selectable_value(&mut self.page, Page::Power, lang.t(Text::PageDevice));
+                    page_tab(ui, &mut self.page, Page::Power, lang.t(Text::PageDevice));
                 }
                 if self.terminal_offered() {
-                    ui.selectable_value(&mut self.page, Page::Terminal, lang.t(Text::PageTerminal));
+                    page_tab(
+                        ui,
+                        &mut self.page,
+                        Page::Terminal,
+                        lang.t(Text::PageTerminal),
+                    );
                 }
             });
         });
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
         theme::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             match self.page {
@@ -161,51 +177,83 @@ impl Session {
     }
     /// Connection details shown beside the pages.
     pub fn show_status(&mut self, ui: &mut egui::Ui, lang: Language) {
-        ui.label(
-            RichText::new(lang.t(Text::ConnectionStatus))
-                .small()
-                .strong()
-                .color(theme::MUTED),
+        status_caption(ui, lang.t(Text::ConnectionStatus));
+        theme::label_value(
+            ui,
+            lang.t(Text::ConnectionPath),
+            RichText::new(self.path_text().map_or("–", |path| lang.t(path))),
         );
-        ui.add_space(4.0);
-        ui.label(lang.t(Text::ConnectionPath));
-        ui.strong(self.path_text().map_or("–", |path| lang.t(path)));
-        ui.add_space(12.0);
-        ui.label(lang.t(Text::LocalAccess));
-        ui.strong(lang.t(if self.is_connected() {
-            Text::StateConnected
-        } else {
-            Text::NotConnected
-        }));
+        theme::label_value(
+            ui,
+            lang.t(Text::LocalAccess),
+            RichText::new(lang.t(if self.is_connected() {
+                Text::StateConnected
+            } else {
+                Text::NotConnected
+            })),
+        );
         if let Some(status) = &self.snapshot.status {
-            ui.add_space(12.0);
-            ui.label(lang.t(Text::NetworkOnDevice));
-            ui.strong(network_label(&status.network, lang));
-            ui.add_space(12.0);
-            ui.label(lang.t(Text::ReachableFromComputer));
+            theme::label_value(
+                ui,
+                lang.t(Text::NetworkOnDevice),
+                RichText::new(network_label(&status.network, lang)),
+            );
             let (text, color) = reachability_label(status.ip_reachability);
-            ui.label(RichText::new(lang.t(text)).strong().color(color));
+            theme::label_value(
+                ui,
+                lang.t(Text::ReachableFromComputer),
+                RichText::new(lang.t(text)).color(color),
+            );
         }
         if self.is_connected() {
-            ui.add_space(12.0);
-            ui.label(lang.t(Text::FunctionsOverConnection));
+            ui.add_space(theme::space::M);
+            status_caption(ui, lang.t(Text::FunctionsOverConnection));
             for (function, availability) in self.snapshot.functions() {
-                let (mark, color) = availability_style(availability);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(mark).color(color));
-                    ui.label(RichText::new(lang.t(function_label(function))).color(color));
+                let (offered, color) = availability_style(availability);
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme::space::S;
+                    // Lines the tick up with the first line of a label that wraps.
+                    ui.vertical(|ui| {
+                        ui.add_space(3.0);
+                        theme::tick(ui, offered);
+                    });
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(lang.t(function_label(function))).color(color),
+                            )
+                            .wrap(),
+                        );
+                        if !offered {
+                            let hint = if function == Function::Terminal {
+                                Text::NoAddressYet
+                            } else {
+                                Text::NotOfferedByDevice
+                            };
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(lang.t(hint)).small().color(theme::TEXT_MUTED),
+                                )
+                                .wrap(),
+                            );
+                        }
+                    });
                 });
-                if availability == Availability::NotOffered {
-                    let hint = if function == Function::Terminal {
-                        Text::NoAddressYet
-                    } else {
-                        Text::NotOfferedByDevice
-                    };
-                    ui.label(RichText::new(lang.t(hint)).small().color(theme::MUTED));
-                }
             }
         }
     }
+}
+
+/// Heading of a group in the status column.
+fn status_caption(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        RichText::new(text.to_uppercase())
+            .small()
+            .strong()
+            .color(theme::TEXT_MUTED),
+    );
+    ui.add_space(theme::space::XS);
 }
 
 fn function_label(function: Function) -> Text {
@@ -220,10 +268,11 @@ fn function_label(function: Function) -> Text {
         Function::Terminal => Text::FunctionTerminal,
     }
 }
-fn availability_style(availability: Availability) -> (&'static str, egui::Color32) {
+/// Whether the function gets a tick, and the colour of its name.
+fn availability_style(availability: Availability) -> (bool, egui::Color32) {
     match availability {
-        Availability::Available => ("✓", theme::GREEN),
-        Availability::NotOffered => ("–", theme::MUTED),
+        Availability::Available => (true, theme::TEXT),
+        Availability::NotOffered => (false, theme::TEXT_MUTED),
     }
 }
 
@@ -245,9 +294,9 @@ fn error_text(error: SetupError) -> Text {
 }
 fn reachability_label(reachability: IpReachability) -> (Text, egui::Color32) {
     match reachability {
-        IpReachability::Unverified => (Text::ReachabilityUnverified, theme::MUTED),
-        IpReachability::Authenticated => (Text::ReachabilityAuthenticated, theme::GREEN),
-        IpReachability::Unreachable => (Text::ReachabilityUnreachable, theme::AMBER),
+        IpReachability::Unverified => (Text::ReachabilityUnverified, theme::TEXT_MUTED),
+        IpReachability::Authenticated => (Text::ReachabilityAuthenticated, theme::SUCCESS),
+        IpReachability::Unreachable => (Text::ReachabilityUnreachable, theme::WARNING),
     }
 }
 

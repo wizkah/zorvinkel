@@ -9,7 +9,7 @@ use eframe::egui::{self, RichText};
 
 const TILE: egui::Vec2 = egui::vec2(270.0, 172.0);
 const AVATAR: f32 = 56.0;
-const TILE_PADDING: f32 = 12.0;
+const TILE_PADDING: f32 = theme::space::M;
 
 pub enum TileEvent {
     /// Open the device tab without connecting.
@@ -43,11 +43,11 @@ fn tile(ui: &mut egui::Ui, session: &Session, lang: Language) -> Option<TileEven
     let (rect, background) = ui.allocate_exact_size(TILE, egui::Sense::click());
     ui.painter().rect(
         rect,
-        10,
+        theme::radius::CARD,
         if background.hovered() {
-            theme::BLUE_PALE
+            theme::ACCENT_SUBTLE
         } else {
-            egui::Color32::WHITE
+            theme::SURFACE_RAISED
         },
         egui::Stroke::new(1.0_f32, theme::BORDER),
         egui::StrokeKind::Inside,
@@ -69,7 +69,7 @@ fn tile(ui: &mut egui::Ui, session: &Session, lang: Language) -> Option<TileEven
             .max_rect(text)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
-    column.spacing_mut().item_spacing.y = 4.0;
+    column.spacing_mut().item_spacing.y = theme::space::XS;
     column.add(egui::Label::new(RichText::new(&session.name).strong()).truncate());
     column.horizontal(|ui| {
         state_label(ui, state, lang);
@@ -77,7 +77,7 @@ fn tile(ui: &mut egui::Ui, session: &Session, lang: Language) -> Option<TileEven
             ui.label(
                 RichText::new(format!("· {}", lang.t(path)))
                     .small()
-                    .color(theme::MUTED),
+                    .color(theme::TEXT_MUTED),
             );
         }
     });
@@ -89,7 +89,7 @@ fn tile(ui: &mut egui::Ui, session: &Session, lang: Language) -> Option<TileEven
             lang,
             [Text::ReachBleFound, Text::ReachBleMissing],
         );
-        ui.add_space(6.0);
+        ui.add_space(theme::space::S);
         reach_indicator(
             ui,
             session.via_ip,
@@ -98,7 +98,7 @@ fn tile(ui: &mut egui::Ui, session: &Session, lang: Language) -> Option<TileEven
             [Text::ReachIpFound, Text::ReachIpMissing],
         );
     });
-    column.add_space(2.0);
+    column.add_space(theme::space::XS);
     let event = connection_button(&mut column, session, state, text.width(), lang);
     if background.double_clicked() {
         return Some(TileEvent::Open);
@@ -111,11 +111,11 @@ fn reach_indicator(ui: &mut egui::Ui, found: bool, label: Text, lang: Language, 
     let response = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            theme::status_dot(ui, if found { theme::GREEN } else { theme::BORDER });
+            theme::status_dot(ui, if found { theme::SUCCESS } else { theme::BORDER });
             ui.label(RichText::new(lang.t(label)).small().color(if found {
-                theme::GREEN
+                theme::SUCCESS
             } else {
-                theme::MUTED
+                theme::TEXT_MUTED
             }));
         })
         .response;
@@ -138,13 +138,16 @@ fn connection_button(
     } else {
         theme::primary_button(lang.t(Text::Connect))
     };
-    ui.add_enabled(enabled, button.min_size(egui::vec2(width, 28.0)))
-        .clicked()
-        .then_some(if connected {
-            TileEvent::Disconnect
-        } else {
-            TileEvent::Connect
-        })
+    ui.add_enabled(
+        enabled,
+        button.min_size(egui::vec2(width, theme::size::ROW_HEIGHT)),
+    )
+    .clicked()
+    .then_some(if connected {
+        TileEvent::Disconnect
+    } else {
+        TileEvent::Connect
+    })
 }
 
 #[cfg(test)]

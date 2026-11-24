@@ -1,7 +1,7 @@
 //! Pages of the configured services: one tab per group, one block per service (ADR-021).
 use super::{
     i18n::{Language, Text},
-    pages::draw_qr,
+    pages::{draw_qr, hint},
     session::Session,
     theme,
 };
@@ -29,7 +29,7 @@ impl Session {
     }
 
     pub fn services(&mut self, ui: &mut egui::Ui, lang: Language) {
-        ui.heading(&self.service_group);
+        theme::section_title(ui, &self.service_group);
         let reachability = self
             .snapshot
             .status
@@ -64,13 +64,13 @@ impl Session {
         if service.actions.is_empty() {
             return;
         }
-        ui.add_space(6.0);
+        ui.add_space(theme::space::S);
         if let Some((name, action)) = self.confirm_service.clone()
             && name == service.name
         {
             ui.label(confirmation_question(&service.name, action, lang));
             ui.horizontal_wrapped(|ui| {
-                if self.action_button(ui, theme::primary_button(lang.t(action_label(action)))) {
+                if self.action_button(ui, theme::danger_button(lang.t(action_label(action)))) {
                     self.confirm_service = None;
                     self.submit(SetupRequest::ServiceAction { name, action });
                 }
@@ -121,19 +121,21 @@ fn show_service(
     lang: Language,
 ) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(&service.name).strong().size(16.0));
+        ui.label(RichText::new(&service.name).strong());
         let (text, color) = state_label(service.state);
         ui.label(RichText::new(lang.t(text)).strong().color(color));
     });
     if let Some(version) = &service.version {
-        ui.label(RichText::new(lang.format(Text::ServiceVersion, &[version])).color(theme::MUTED));
+        ui.label(
+            RichText::new(lang.format(Text::ServiceVersion, &[version])).color(theme::TEXT_MUTED),
+        );
     }
     let Some(web) = &service.web else {
         return;
     };
     ui.add_space(6.0);
     let Some(host) = web_host(addresses) else {
-        ui.small(lang.t(Text::ServiceNoAddress));
+        hint(ui, lang.t(Text::ServiceNoAddress));
         return;
     };
     let url = web.url(host);
@@ -153,10 +155,10 @@ fn show_service(
                 ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
             }
             ui.monospace(&url);
-            ui.small(lang.t(Text::ScanToOpen));
+            hint(ui, lang.t(Text::ScanToOpen));
             if reachability != IpReachability::Authenticated {
                 ui.small(
-                    RichText::new(lang.t(Text::ServiceNotConfirmedReachable)).color(theme::AMBER),
+                    RichText::new(lang.t(Text::ServiceNotConfirmedReachable)).color(theme::WARNING),
                 );
             }
         });
@@ -174,11 +176,11 @@ fn web_host(addresses: &[NetworkAddress]) -> Option<IpAddr> {
 
 fn state_label(state: ServiceState) -> (Text, egui::Color32) {
     match state {
-        ServiceState::Active => (Text::ServiceRunning, theme::GREEN),
-        ServiceState::Activating => (Text::ServiceStarting, theme::AMBER),
-        ServiceState::Inactive => (Text::ServiceStopped, theme::MUTED),
-        ServiceState::Failed => (Text::StateFailed, theme::ERROR),
-        ServiceState::Unknown => (Text::ServiceUnknown, theme::MUTED),
+        ServiceState::Active => (Text::ServiceRunning, theme::SUCCESS),
+        ServiceState::Activating => (Text::ServiceStarting, theme::WARNING),
+        ServiceState::Inactive => (Text::ServiceStopped, theme::TEXT_MUTED),
+        ServiceState::Failed => (Text::StateFailed, theme::DANGER),
+        ServiceState::Unknown => (Text::ServiceUnknown, theme::TEXT_MUTED),
     }
 }
 

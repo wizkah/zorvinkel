@@ -8,16 +8,16 @@ use eframe::egui::{self, RichText};
 
 impl Session {
     pub fn system(&mut self, ui: &mut egui::Ui, lang: Language) {
-        ui.heading(lang.t(Text::SystemInformation));
+        theme::section_title(ui, lang.t(Text::SystemInformation));
         let Some(info) = &self.snapshot.system_info else {
             ui.label(lang.t(Text::SystemNoValues));
             return;
         };
         ui.label(lang.t(Text::SystemRefreshed));
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
         egui::Grid::new("system_info")
             .num_columns(2)
-            .spacing([24.0, 8.0])
+            .spacing([theme::space::XL, theme::space::S])
             .show(ui, |ui| {
                 let network = self
                     .snapshot
@@ -25,7 +25,7 @@ impl Session {
                     .as_ref()
                     .map(|status| super::device_tab::network_label(&status.network, lang));
                 let mut row = |label: Text, value: String| {
-                    ui.label(RichText::new(lang.t(label)).color(theme::MUTED));
+                    ui.label(RichText::new(lang.t(label)).color(theme::TEXT_MUTED));
                     ui.strong(value);
                     ui.end_row();
                 };

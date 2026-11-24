@@ -46,6 +46,16 @@ The animation rasterises four image layers once and then moves prepared textures
 
 128 workspace tests with all features passed; a native keychain test stays hidden. Clippy passes with the already documented exception for existing animation test lints. After the adjustment of the frame planning, the ten GUI tests pass again. The app is packaged as `target/Zorvinkel.app`; the suffix in the previous file name is dropped. In the native interface, `test-pi` is visible without an identifier and with a secure device connection. The prepared animation layers were checked visually in the central overlay; a measurement of the display frame rate actually achieved is outstanding.
 
+## Design tokens (ADR-036)
+
+**Date:** 2026-11-24. Windows 11, debug build, `--simulate-gui` with three devices, window about 960 × 660 px.
+
+Before the change, the simulation was inspected visually: grey secondary buttons outside the palette, an empty box instead of a tick in the function list, a status column cut off at the bottom and right, fields lower than buttons. After the change, the device list, all pages of a device tab (Wi-Fi in both modes with a selected network, System, both service groups, Device with the shutdown confirmation, Terminal login) and the status column were checked visually in English and German. Ticks, wrapping and scrolling of the status column, field heights, the segmented control, the page tabs including hover, the network list and the red confirmation appear as intended; German texts fit without overflow.
+
+`cargo fmt --check`, Clippy for `zorvinkel-client` with `gui`, `security` and `ble-client` and `-D warnings`, and 76 client tests pass.
+
+Not checked: macOS and Linux, high-DPI scaling other than this display, the running terminal, error messages and action progress inside a device tab, a real device, contrast by measurement.
+
 ## Limits
 
 No complete manual usability check, no QR scan with an independent decoder and no user acceptance. Windows/Linux GUI, minimum operating-system versions, accessibility and app packaging are unchecked. This experiment checks no real device connection, network configuration or credential takeover. The inputs simulate password-protected personal Wi-Fi; other security types are not checked.
