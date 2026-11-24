@@ -20,6 +20,10 @@ pub trait NetworkStatusSource {
     fn tunnel_control(&mut self) -> Option<&mut dyn crate::tunnel::TunnelControl> {
         None
     }
+    /// Checks the login of an administrator account for registering a client (ADR-037).
+    fn admin_login(&mut self) -> Option<&mut dyn crate::login::AdminLogin> {
+        None
+    }
     /// The device accepts authenticated IP connections for the reachability test.
     fn ip_endpoint_available(&self) -> bool {
         false

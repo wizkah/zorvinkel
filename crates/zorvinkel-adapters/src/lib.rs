@@ -42,6 +42,8 @@ pub mod identity;
 #[cfg(feature = "security")]
 pub mod security;
 
+#[cfg(feature = "security")]
+pub mod admin_login;
 #[cfg(feature = "tunnel")]
 pub mod tunnel_gate;
 #[cfg(feature = "tunnel")]

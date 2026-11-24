@@ -38,6 +38,9 @@ pub enum Operation {
     RestartPolicySet,
     /// Opens the terminal tunnel to the device's local `sshd` (ADR-031).
     TunnelOpen,
+    /// Registers the client when the user and password of an administrator account of the
+    /// device are right, even while registration is closed (ADR-037).
+    RegisterWithLogin,
     Unknown(u16),
 }
 impl Operation {
@@ -64,6 +67,7 @@ impl Operation {
             Self::RestartPolicyRead => 19,
             Self::RestartPolicySet => 20,
             Self::TunnelOpen => 21,
+            Self::RegisterWithLogin => 22,
             Self::Unknown(code) => code,
         }
     }
@@ -81,6 +85,12 @@ pub enum RemoteError {
     Unavailable,
     Busy,
     Conflict,
+    /// The user name or the password of a login is not right.
+    LoginRejected,
+    /// The login is right, but the account is no administrator of the device.
+    NotAdministrator,
+    /// Too many wrong logins lately; the device accepts none for a while.
+    Throttled,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResponseBody {
@@ -116,7 +126,7 @@ pub fn encode_request(request: Request) -> Result<Vec<u8>, CodecError> {
     encode_request_payload(request, &[])
 }
 pub fn encode_request_payload(request: Request, payload: &[u8]) -> Result<Vec<u8>, CodecError> {
-    if matches!(request.operation, Operation::Unknown(code) if (1..=21).contains(&code) || code >= 0x8000)
+    if matches!(request.operation, Operation::Unknown(code) if (1..=22).contains(&code) || code >= 0x8000)
     {
         return Err(CodecError::Malformed);
     }
@@ -155,6 +165,9 @@ fn validate_request_payload(operation: Operation, payload: &[u8]) -> Result<(), 
         Operation::TunnelOpen => {
             crate::tunnel::OpenRequest::parse(payload)?;
         }
+        Operation::RegisterWithLogin => {
+            crate::login::read_login(payload)?;
+        }
         _ if !payload.is_empty() => return Err(CodecError::Malformed),
         _ => (),
     }
@@ -191,6 +204,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<Request, CodecError> {
         19 => Operation::RestartPolicyRead,
         20 => Operation::RestartPolicySet,
         21 => Operation::TunnelOpen,
+        22 => Operation::RegisterWithLogin,
         other => Operation::Unknown(other),
     };
     validate_request_payload(operation, payload)?;
@@ -234,6 +248,9 @@ pub fn encode_response(response: &Response) -> Result<Vec<u8>, CodecError> {
                 RemoteError::Unavailable => 4,
                 RemoteError::Busy => 5,
                 RemoteError::Conflict => 6,
+                RemoteError::LoginRejected => 7,
+                RemoteError::NotAdministrator => 8,
+                RemoteError::Throttled => 9,
             }],
         ),
     };
@@ -287,6 +304,9 @@ pub fn decode_response(bytes: &[u8]) -> Result<Response, CodecError> {
             4 => RemoteError::Unavailable,
             5 => RemoteError::Busy,
             6 => RemoteError::Conflict,
+            7 => RemoteError::LoginRejected,
+            8 => RemoteError::NotAdministrator,
+            9 => RemoteError::Throttled,
             _ => return Err(CodecError::Malformed),
         }),
         _ => return Err(CodecError::Malformed),

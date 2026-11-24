@@ -14,6 +14,7 @@ use std::{
 use zeroize::Zeroizing;
 use zorvinkel_application::{
     device::NetworkStatusSource,
+    login::{LoginOutcome, register_with_login},
     registration::register,
     state::{ApplicationError, StateStore},
     status::{authenticate, read_network_status},
@@ -23,7 +24,7 @@ use zorvinkel_core::{
     registry::{ClientKey, RegistryError},
 };
 use zorvinkel_protocol::tunnel::{MIN_FRAME, OpenRequest, WINDOW_FRAMES};
-use zorvinkel_protocol::{ip::CorrelationToken, status::*};
+use zorvinkel_protocol::{ip::CorrelationToken, login::read_login, status::*};
 
 #[derive(Clone, Copy)]
 pub struct ServiceTime {
@@ -245,7 +246,13 @@ impl DeviceSessionState {
         };
         let close = matches!(
             body,
-            ResponseBody::Error(RemoteError::Unauthorized | RemoteError::RegistrationClosed)
+            ResponseBody::Error(
+                RemoteError::Unauthorized
+                    | RemoteError::RegistrationClosed
+                    | RemoteError::LoginRejected
+                    | RemoteError::NotAdministrator
+                    | RemoteError::Throttled
+            )
         );
         let response = Zeroizing::new(encode_response(&Response {
             id: request.id,
@@ -276,6 +283,27 @@ impl DeviceSessionState {
                 register(store, actor.clone(), registration_seconds)?;
                 self.authorized = true;
                 return Ok(ResponseBody::Registered);
+            }
+            Operation::RegisterWithLogin => {
+                let (user, password) =
+                    read_login(payload).map_err(|_| ApplicationError::Conflict)?;
+                let Some(login) = network.admin_login() else {
+                    return Ok(ResponseBody::Error(RemoteError::Unsupported));
+                };
+                return Ok(
+                    match register_with_login(store, login, actor.clone(), user, password)? {
+                        LoginOutcome::Accepted => {
+                            self.authorized = true;
+                            ResponseBody::Registered
+                        }
+                        LoginOutcome::Rejected => ResponseBody::Error(RemoteError::LoginRejected),
+                        LoginOutcome::NotAdministrator => {
+                            ResponseBody::Error(RemoteError::NotAdministrator)
+                        }
+                        LoginOutcome::Throttled => ResponseBody::Error(RemoteError::Throttled),
+                        LoginOutcome::Unavailable => ResponseBody::Error(RemoteError::Unavailable),
+                    },
+                );
             }
             Operation::Authenticate => {
                 authenticate(store, actor)?;
@@ -715,7 +743,13 @@ impl ClientSession {
             self.pending = None;
             if matches!(
                 response.body,
-                ResponseBody::Error(RemoteError::Unauthorized | RemoteError::RegistrationClosed)
+                ResponseBody::Error(
+                    RemoteError::Unauthorized
+                        | RemoteError::RegistrationClosed
+                        | RemoteError::LoginRejected
+                        | RemoteError::NotAdministrator
+                        | RemoteError::Throttled
+                )
             ) {
                 self.close();
             }
@@ -731,7 +765,10 @@ fn response_matches(response: &ResponseBody, operation: Operation) -> bool {
     matches!(
         (response, operation),
         (ResponseBody::Error(_), _)
-            | (ResponseBody::Registered, Operation::Register)
+            | (
+                ResponseBody::Registered,
+                Operation::Register | Operation::RegisterWithLogin
+            )
             | (ResponseBody::Authenticated, Operation::Authenticate)
             | (ResponseBody::Status { .. }, Operation::Status)
             | (ResponseBody::Capabilities(_), Operation::Capabilities)

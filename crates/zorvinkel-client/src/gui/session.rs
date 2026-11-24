@@ -67,7 +67,7 @@ impl Action {
     fn for_request(request: &SetupRequest) -> Option<Self> {
         Some(match request {
             SetupRequest::Discover | SetupRequest::OpenTunnel => return None,
-            SetupRequest::Connect(_) => Self::Connect,
+            SetupRequest::Connect(_) | SetupRequest::ConnectWithLogin { .. } => Self::Connect,
             SetupRequest::Disconnect => Self::Disconnect,
             SetupRequest::Scan => Self::Scan,
             SetupRequest::ConnectWifi { .. } => Self::Wifi,
@@ -162,6 +162,10 @@ pub struct Session {
     pub confirm_service: Option<(String, ServiceAction)>,
     pub ssid: String,
     pub password: String,
+    /// User and password of an administrator account of the device, typed when the device does
+    /// not know this computer yet (ADR-037). The password is taken out of the field on sending.
+    pub login_user: String,
+    pub login_password: zeroize::Zeroizing<String>,
     pub show_wifi_password: bool,
     pub ap_ssid: String,
     pub ap_password: String,
@@ -198,6 +202,8 @@ impl Session {
             confirm_service: None,
             ssid: String::new(),
             password: String::new(),
+            login_user: String::new(),
+            login_password: zeroize::Zeroizing::new(String::new()),
             show_wifi_password: false,
             ap_ssid: String::new(),
             ap_password: String::new(),
@@ -240,6 +246,28 @@ impl Session {
     }
     pub fn connect(&mut self) {
         self.submit(SetupRequest::Connect(self.handle.clone()));
+    }
+    /// The device refused this computer and an administrator login can register it.
+    pub fn needs_login(&self) -> bool {
+        !self.is_connected()
+            && matches!(
+                self.error,
+                Some(
+                    SetupError::LoginRequired
+                        | SetupError::LoginRejected
+                        | SetupError::NotAdministrator
+                        | SetupError::TooManyLogins
+                )
+            )
+    }
+    /// Connects with the typed login; the password leaves the form with this call.
+    pub fn connect_with_login(&mut self) {
+        let password = std::mem::take(&mut *self.login_password);
+        self.submit(SetupRequest::ConnectWithLogin {
+            handle: self.handle.clone(),
+            user: self.login_user.trim().to_owned(),
+            password,
+        });
     }
     pub fn disconnect(&mut self) {
         self.terminal = None;

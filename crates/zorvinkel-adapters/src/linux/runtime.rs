@@ -31,6 +31,8 @@ pub struct RuntimeNetwork {
     service_control: Option<super::services::ServiceControlQueue>,
     ip_endpoint: bool,
     tunnel: Option<crate::tunnel_gate::TunnelGate>,
+    /// Registers clients with the login of an administrator account (ADR-037).
+    admin_login: Option<crate::admin_login::SystemAdminLogin<crate::admin_login::SshPasswordCheck>>,
 }
 impl zorvinkel_application::device::NetworkStatusSource for RuntimeNetwork {
     fn read_status(&mut self) -> Result<zorvinkel_core::NetworkStatus, PortError> {
@@ -55,6 +57,11 @@ impl zorvinkel_application::device::NetworkStatusSource for RuntimeNetwork {
         self.tunnel
             .as_mut()
             .map(|gate| gate as &mut dyn zorvinkel_application::tunnel::TunnelControl)
+    }
+    fn admin_login(&mut self) -> Option<&mut dyn zorvinkel_application::login::AdminLogin> {
+        self.admin_login
+            .as_mut()
+            .map(|login| login as &mut dyn zorvinkel_application::login::AdminLogin)
     }
     fn ip_endpoint_available(&self) -> bool {
         self.ip_endpoint
@@ -105,6 +112,7 @@ impl RuntimeState {
                 service_control: None,
                 ip_endpoint: false,
                 tunnel: None,
+                admin_login: None,
             },
             peers: BTreeMap::new(),
             epoch: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
@@ -298,6 +306,12 @@ pub async fn run(
     }
     // The terminal over Bluetooth is on by default; the operator switches it off with a file.
     runtime.network.tunnel = Some(crate::tunnel_gate::TunnelGate::system());
+    // A client the device does not know can register with the login of an administrator
+    // account when `ssh` is there to check it against the device's own `sshd` (ADR-037).
+    runtime.network.admin_login = crate::admin_login::SshPasswordCheck::system()
+        .ok()
+        .filter(|_| Path::new("/usr/bin/ssh").exists())
+        .map(crate::admin_login::SystemAdminLogin::system);
     // Only the selected stack gets a controller; a limitation leaves network setup
     // unavailable (reported through capabilities) without touching the network.
     let mut status_source = StatusSource::WpaCli;

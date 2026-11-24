@@ -60,3 +60,4 @@ systemctl enable --now zorvinkeld.service
 # The terminal (ADR-030) needs sshd on the loopback interface and tmux; see packaging/Terminal.md.
 command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ] || echo 'Hinweis: sshd fehlt (apt install openssh-server); das Terminal bleibt nicht verfügbar.' >&2
 command -v tmux >/dev/null 2>&1 || echo 'Hinweis: tmux fehlt (apt install tmux); das Terminal endet sonst mit Status 127.' >&2
+command -v ssh >/dev/null 2>&1 || [ -x /usr/bin/ssh ] || echo 'Hinweis: ssh fehlt (apt install openssh-client); ohne den Client prüft das Gerät keine Anmeldung zur Registrierung eines neuen Computers (ADR-037).' >&2

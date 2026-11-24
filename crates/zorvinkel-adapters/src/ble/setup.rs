@@ -122,6 +122,18 @@ impl NativeSetup {
         })
     }
     fn apply(&mut self, request: SetupRequest) -> BleResult<()> {
+        // A login only changes how the first request of a connection registers this computer.
+        let (request, login) = match request {
+            SetupRequest::ConnectWithLogin {
+                handle,
+                user,
+                password,
+            } => (
+                SetupRequest::Connect(handle),
+                Some((user, zeroize::Zeroizing::new(password))),
+            ),
+            other => (other, None),
+        };
         self.runtime.block_on(async {
             match request {
                 SetupRequest::Discover => {
@@ -213,15 +225,28 @@ impl NativeSetup {
                     )
                     .await?;
                     // Register is idempotent for a known client, including a lost initial answer.
-                    if connection.request(Operation::Register).await? != ResponseBody::Registered {
+                    // With a login the device registers this computer if the login is an
+                    // administrator's; the payload is wiped as soon as it is sent.
+                    let response = match &login {
+                        None => connection.request(Operation::Register).await?,
+                        Some((user, password)) => {
+                            let payload = zeroize::Zeroizing::new(
+                                zorvinkel_protocol::login::login_payload(user, password)
+                                    .map_err(|_| "invalid login")?,
+                            );
+                            connection
+                                .request_payload(Operation::RegisterWithLogin, &payload)
+                                .await?
+                        }
+                    };
+                    if response != ResponseBody::Registered {
                         connection.close().await;
-                        return Err(crate::security::SecureError::Unauthorized.into());
+                        return Err(refusal(response));
                     }
-                    if connection.request(Operation::Authenticate).await?
-                        != ResponseBody::Authenticated
-                    {
+                    let response = connection.request(Operation::Authenticate).await?;
+                    if response != ResponseBody::Authenticated {
                         connection.close().await;
-                        return Err(crate::security::SecureError::Unauthorized.into());
+                        return Err(refusal(response));
                     }
                     let ResponseBody::Capabilities(bits) =
                         connection.request(Operation::Capabilities).await?
@@ -741,8 +766,12 @@ impl SetupBackend for NativeSetup {
             .as_ref()
             .and_then(StatusConnection::session_remaining)
             == Some(Duration::ZERO);
-        let continues_session =
-            !matches!(request, SetupRequest::Connect(_) | SetupRequest::Discover);
+        let continues_session = !matches!(
+            request,
+            SetupRequest::Connect(_)
+                | SetupRequest::ConnectWithLogin { .. }
+                | SetupRequest::Discover
+        );
         let is_refresh = matches!(request, SetupRequest::Refresh);
         // These requests change the device's own network, so the session over IP is expected to end.
         let changes_network = matches!(
@@ -1247,13 +1276,25 @@ impl std::fmt::Display for WifiRequestFailure {
     }
 }
 impl std::error::Error for WifiRequestFailure {}
+/// The error for a device that answered `Register` or `Authenticate` with anything but success.
+/// Only an actual refusal means "not authorised"; busy or failing devices must not look like it.
+fn refusal(response: ResponseBody) -> Box<dyn std::error::Error + Send + Sync> {
+    match response {
+        ResponseBody::Error(error) => WifiRequestFailure(wifi_remote_error(error)).into(),
+        _ => "unexpected response while signing in".into(),
+    }
+}
 fn wifi_remote_error(error: zorvinkel_protocol::status::RemoteError) -> SetupError {
     use zorvinkel_protocol::status::RemoteError;
     match error {
         RemoteError::Busy => SetupError::Busy,
         RemoteError::Conflict => SetupError::Unavailable,
         RemoteError::Unsupported => SetupError::Unsupported,
-        RemoteError::Unauthorized | RemoteError::RegistrationClosed => SetupError::AccessDenied,
+        RemoteError::Unauthorized => SetupError::AccessDenied,
+        RemoteError::RegistrationClosed => SetupError::LoginRequired,
+        RemoteError::LoginRejected => SetupError::LoginRejected,
+        RemoteError::NotAdministrator => SetupError::NotAdministrator,
+        RemoteError::Throttled => SetupError::TooManyLogins,
         _ => SetupError::Unavailable,
     }
 }

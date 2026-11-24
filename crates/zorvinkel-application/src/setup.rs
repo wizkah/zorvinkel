@@ -27,6 +27,15 @@ pub enum SetupError {
     SessionExpired,
     /// A default needs a Wi-Fi connection or the device's own Wi-Fi to be active.
     NoActiveNetwork,
+    /// The device does not know this computer and registration is closed: an administrator login
+    /// of the device registers it (ADR-037).
+    LoginRequired,
+    /// The user name or the password of that login is not right.
+    LoginRejected,
+    /// The login is right, but the account is no administrator of the device.
+    NotAdministrator,
+    /// The device stopped accepting logins for a while after too many wrong ones.
+    TooManyLogins,
 }
 
 /// What a connected device can do for its user.
@@ -99,6 +108,13 @@ pub enum SetupRequest {
     /// `SetupSnapshot::tunnel` (ADR-031). A refusal is reported in the update, the connection stays.
     OpenTunnel,
     Connect(String),
+    /// Like `Connect`, for a computer the device does not know: registers it with the user and
+    /// password of an administrator account of the device (ADR-037). The password is used once.
+    ConnectWithLogin {
+        handle: String,
+        user: String,
+        password: String,
+    },
     Disconnect,
     Refresh,
     Scan,

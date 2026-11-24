@@ -109,7 +109,7 @@ impl SimulatedSetup {
                 self.discovered = true;
                 return Ok(());
             }
-            SetupRequest::Connect(handle) => {
+            SetupRequest::Connect(handle) | SetupRequest::ConnectWithLogin { handle, .. } => {
                 if !self.discovered || !self.devices.iter().any(|device| device.handle == handle) {
                     return Err(SetupError::Disconnected);
                 }

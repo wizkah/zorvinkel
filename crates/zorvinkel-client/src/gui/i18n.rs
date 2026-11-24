@@ -281,6 +281,29 @@ texts! {
         en: "Saved passwords are not available. Enter the password manually.",
         de: "Gespeicherte Passwörter sind nicht verfügbar. Gib das Passwort manuell ein.",
     },
+    ErrorLoginRequired {
+        en: "The device does not know this computer yet. Log in with the user and password of an administrator account of the device.",
+        de: "Das Gerät kennt diesen Computer noch nicht. Melde dich mit Benutzer und Passwort eines Administrator-Kontos des Geräts an.",
+    },
+    ErrorLoginRejected {
+        en: "User or password is not right. Check both and try again.",
+        de: "Benutzer oder Passwort stimmt nicht. Prüfe beides und versuche es erneut.",
+    },
+    ErrorNotAdministrator {
+        en: "This account may not register computers. Use an administrator account (in the group sudo).",
+        de: "Dieses Konto darf keine Computer anmelden. Verwende ein Administrator-Konto (in der Gruppe sudo).",
+    },
+    ErrorTooManyLogins {
+        en: "Too many wrong logins. The device accepts no login for a few minutes.",
+        de: "Zu viele falsche Anmeldungen. Das Gerät nimmt einige Minuten lang keine Anmeldung an.",
+    },
+    LoginIntro {
+        en: "The password is sent once, encrypted, and not stored. This computer gets its own key on the device, so the next connection needs no password.",
+        de: "Das Passwort wird einmalig verschlüsselt gesendet und nicht gespeichert. Dieser Computer erhält am Gerät einen eigenen Schlüssel, die nächste Verbindung braucht dann kein Passwort.",
+    },
+    LoginUser { en: "User of the device", de: "Benutzer am Gerät" },
+    LoginPassword { en: "Password of the device", de: "Passwort am Gerät" },
+    LoginButton { en: "Log in and register", de: "Anmelden und registrieren" },
 
     // Pages and the connection status beside them
     PageWifi { en: "Wi-Fi", de: "WLAN" },

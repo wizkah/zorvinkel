@@ -2150,3 +2150,169 @@ fn restart_option_is_encrypted_authorized_and_offered_only_when_supported() {
         ResponseBody::Error(RemoteError::Unsupported)
     );
 }
+
+#[test]
+fn an_unknown_client_registers_with_an_administrator_login_even_after_registration_closed() {
+    use zorvinkel_application::{
+        device::NetworkStatusSource,
+        login::{AdminLogin, LoginOutcome},
+    };
+    use zorvinkel_protocol::login::login_payload;
+    /// Accepts "pi"/"secret" and nothing else; "guest" has the right password but no rights.
+    #[derive(Default)]
+    struct Login {
+        offered: bool,
+        attempts: Vec<String>,
+    }
+    impl NetworkStatusSource for Login {
+        fn read_status(&mut self) -> Result<NetworkStatus, zorvinkel_application::PortError> {
+            Ok(NetworkStatus::Disconnected)
+        }
+        fn admin_login(&mut self) -> Option<&mut dyn AdminLogin> {
+            self.offered.then_some(self as &mut dyn AdminLogin)
+        }
+    }
+    impl AdminLogin for Login {
+        fn verify(&mut self, user: &str, password: &str) -> LoginOutcome {
+            self.attempts.push(user.to_owned());
+            match (user, password) {
+                ("pi", "secret") => LoginOutcome::Accepted,
+                ("guest", "secret") => LoginOutcome::NotAdministrator,
+                ("lock", _) => LoginOutcome::Throttled,
+                _ => LoginOutcome::Rejected,
+            }
+        }
+    }
+    let device_key = identity();
+    let sessions = SessionRegistry::default();
+    let mut store = state();
+    let mut login = Login {
+        offered: true,
+        ..Login::default()
+    };
+    // The first client closes registration the usual way.
+    let (first, _) = authorized_pair(&identity(), &device_key, &sessions, &mut store, false);
+    drop(first);
+    let attempt = |store: &mut MemoryStateStore,
+                   login: &mut Login,
+                   newcomer: &IdentityHandle,
+                   user: &str,
+                   password: &str| {
+        let (client, device) = raw_pair(newcomer, &device_key);
+        let mut client = ClientSession::new(client).unwrap();
+        let mut device = DeviceSession::new(device, &sessions).unwrap();
+        let payload = login_payload(user, password).unwrap();
+        let request = client
+            .request_payload(Operation::RegisterWithLogin, &payload, NOW)
+            .unwrap();
+        let response = device.handle(&request, store, login, time(NOW)).unwrap();
+        let body = client.receive(&response, NOW).unwrap().body;
+        (client, device, body)
+    };
+
+    let stranger = identity();
+    for (user, password, expected) in [
+        ("pi", "wrong", RemoteError::LoginRejected),
+        ("guest", "secret", RemoteError::NotAdministrator),
+        ("lock", "secret", RemoteError::Throttled),
+    ] {
+        let (_, device, body) = attempt(&mut store, &mut login, &stranger, user, password);
+        assert_eq!(body, ResponseBody::Error(expected));
+        assert!(device.is_closed(), "a refused login ends the session");
+        assert_eq!(store.read().unwrap().registry.clients.len(), 1);
+    }
+    let (mut client, mut device, body) = attempt(&mut store, &mut login, &stranger, "pi", "secret");
+    assert_eq!(body, ResponseBody::Registered);
+    assert_eq!(store.read().unwrap().registry.clients.len(), 2);
+    assert_eq!(
+        store.read().unwrap().registry.state,
+        RegistrationState::Closed
+    );
+    // The new client is authorised in that very session.
+    let request = client.request(Operation::Status, NOW).unwrap();
+    let response = device
+        .handle(&request, &mut store, &mut login, time(NOW))
+        .unwrap();
+    assert!(matches!(
+        client.receive(&response, NOW).unwrap().body,
+        ResponseBody::Status { .. }
+    ));
+    // A later session of the same client authenticates without a password.
+    let (mut client, mut device) = {
+        let (client, device) = raw_pair(&stranger, &device_key);
+        (
+            ClientSession::new(client).unwrap(),
+            DeviceSession::new(device, &sessions).unwrap(),
+        )
+    };
+    assert_eq!(
+        rpc(
+            &mut client,
+            &mut device,
+            &mut store,
+            Operation::Authenticate
+        ),
+        ResponseBody::Authenticated
+    );
+
+    // A device that cannot check logins says so and registers nobody.
+    login.offered = false;
+    let (_, _, body) = attempt(&mut store, &mut login, &identity(), "pi", "secret");
+    assert_eq!(body, ResponseBody::Error(RemoteError::Unsupported));
+    assert_eq!(store.read().unwrap().registry.clients.len(), 2);
+}
+
+#[test]
+fn a_blocked_client_cannot_come_back_with_a_login() {
+    use zorvinkel_application::{
+        device::NetworkStatusSource,
+        login::{AdminLogin, LoginOutcome},
+    };
+    struct Always;
+    impl NetworkStatusSource for Always {
+        fn read_status(&mut self) -> Result<NetworkStatus, zorvinkel_application::PortError> {
+            Ok(NetworkStatus::Disconnected)
+        }
+        fn admin_login(&mut self) -> Option<&mut dyn AdminLogin> {
+            Some(self)
+        }
+    }
+    impl AdminLogin for Always {
+        fn verify(&mut self, _: &str, _: &str) -> LoginOutcome {
+            LoginOutcome::Accepted
+        }
+    }
+    let device_key = identity();
+    let sessions = SessionRegistry::default();
+    let mut store = state();
+    let admin = identity();
+    let blocked = identity();
+    let (admin_client, _) = authorized_pair(&admin, &device_key, &sessions, &mut store, false);
+    drop(admin_client);
+    let admin_key = ClientKey::new(admin.public_key().to_vec()).unwrap();
+    let blocked_key = ClientKey::new(blocked.public_key().to_vec()).unwrap();
+    authorize_by_client(&mut store, &admin_key, blocked_key.clone()).unwrap();
+    revoke(&mut store, &admin_key, &blocked_key).unwrap();
+    let (client, device) = raw_pair(&blocked, &device_key);
+    let mut client = ClientSession::new(client).unwrap();
+    let mut device = DeviceSession::new(device, &sessions).unwrap();
+    let payload = zorvinkel_protocol::login::login_payload("pi", "secret").unwrap();
+    let request = client
+        .request_payload(Operation::RegisterWithLogin, &payload, NOW)
+        .unwrap();
+    let response = device
+        .handle(&request, &mut store, &mut Always, time(NOW))
+        .unwrap();
+    assert!(matches!(
+        client.receive(&response, NOW).unwrap().body,
+        ResponseBody::Error(RemoteError::Unauthorized)
+    ));
+    assert!(
+        !store
+            .read()
+            .unwrap()
+            .registry
+            .clients
+            .contains(&blocked_key)
+    );
+}

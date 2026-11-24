@@ -98,11 +98,13 @@ The first registration stores the client identity and the closed state in one pe
 
 Further registrations require the grant of the intended new client key by a registered client or an authorised local administrator. Expiry or use closes the grant. Registration stays closed even after the last client is removed. A missing or damaged existing store leads to an error, not to an open re-initialisation.
 
+A client the device does not know can also register itself with the user name and password of an administrator account of the device, in any registration state (ADR-037). The device service checks the password against the device's own `sshd` on loopback, accepts only root and members of an administrator group, limits wrong logins device wide and registers exactly the client key of the secured session; a client that was blocked stays blocked. Later connections need no password.
+
 ### Trust at first contact
 
 The default mode uses Trust on First Use: the device key accepted first is bound permanently. A foreign client in range can win the first registration; an active attacker can impersonate another device at first contact without a prior trust anchor. Encryption alone does not remove this limit.
 
-This first-contact risk is accepted for the default mode. An additional code or a confirmation on the device is not required.
+This first-contact risk is accepted for the default mode. An additional code or a confirmation on the device is not required. A login with a device account at first contact sends the password to the device that answered; with a deposited device key that device is checked first.
 
 Alternatively, public keys can be deposited during setup over a path that is already trusted:
 
@@ -121,7 +123,7 @@ A security adapter protects the same message contract over BLE and IP. The desig
 
 The secured status flow uses the Noise and message profile defined in ADR-006. The choice of library and its integration are implemented and can be checked in simulation; an independent security review and native system acceptance are still outstanding. No custom cryptographic primitives and no administrative commands in handshake payloads. The [Noise specification](https://noiseprotocol.org/noise.html) describes the key exchange; the application decides whether the peer is permitted.
 
-- Before authorisation only limited public protocol information, the handshake and an explicitly allowed registration are accessible.
+- Before authorisation only limited public protocol information, the handshake and an explicitly allowed registration, including the registration with a device login, are accessible.
 - After a completed handshake the registered identity and the permitted operation are checked. A successful cryptographic handshake alone grants no administrative rights.
 - Messages after the handshake are encrypted and integrity-protected; ordering, replay protection and nonces follow the security profile. Each new connection gets fresh session keys.
 - When the transport changes, the same persistent peer identities are verified again. Neither old session keys nor plain bearer tokens are carried over.

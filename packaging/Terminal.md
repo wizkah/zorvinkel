@@ -31,3 +31,13 @@ The file is checked at every request, so no restart is needed. A tunnel that is 
 - At most six tunnel openings per minute. A missing `sshd` does not count.
 - A tunnel ends after eight hours (provisional), when the client's registration is withdrawn, or when the Bluetooth connection ends. The status session over Bluetooth ends after about ten minutes and the connection with it, so the terminal reconnects through a new tunnel and reattaches to `tmux` about that often.
 - Throughput over Bluetooth is a few tens of kB/s and a keystroke echo takes about 90 ms (docs/validation/Terminal-Tunnel.md).
+
+## Registering a new computer with an administrator login
+
+A computer the device does not know can register with the user and password of an administrator account of the device, even after registration closed (ADR-037). The device checks the password by logging in to its own `sshd` on `127.0.0.1:22` with the `ssh` program and a one-time password helper, so it needs:
+
+- `ssh` (`apt install openssh-client`, part of Raspberry Pi OS) at `/usr/bin/ssh`. Without it the device does not offer this registration.
+- Password login enabled in `sshd` (`PasswordAuthentication yes`, the default of Raspberry Pi OS). If `sshd` allows no password, the client reports that the request failed; keys already registered keep working.
+- An account that is root or a member of the group `sudo`, `wheel`, `admin` or `root`. Other accounts are refused after the password was right.
+
+Five wrong passwords within five minutes stop all such logins for the rest of the window (the limit is device wide and does not touch registered clients). A computer that was blocked on the device stays blocked.

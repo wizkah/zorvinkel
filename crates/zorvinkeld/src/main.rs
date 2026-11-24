@@ -4,6 +4,13 @@ use zorvinkel_application::device::Device;
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    // `ssh` starts this program to ask for the password of a login check (ADR-037); it prints
+    // the password from its environment and nothing else. Only that environment has the variable.
+    #[cfg(feature = "security")]
+    if let Some(password) = zorvinkel_adapters::admin_login::answer_password_prompt(&arguments) {
+        println!("{}", password.as_str());
+        return ExitCode::SUCCESS;
+    }
     #[cfg(all(target_os = "linux", feature = "security", feature = "ble-server"))]
     if arguments.len() == 2 && arguments[0] == "--check-storage" {
         return match zorvinkel_adapters::linux::runtime::RuntimeState::open(std::path::Path::new(

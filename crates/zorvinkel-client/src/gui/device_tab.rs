@@ -60,6 +60,9 @@ impl Session {
             );
         }
         ui.add_space(theme::space::L);
+        if self.needs_login() {
+            self.login_form(ui, lang);
+        }
         if !self.is_connected() {
             return;
         }
@@ -74,6 +77,38 @@ impl Session {
             return;
         }
         self.show_pages(ui, lang, host_keys);
+    }
+    /// Registers this computer with an administrator login of the device (ADR-037).
+    fn login_form(&mut self, ui: &mut egui::Ui, lang: Language) {
+        theme::card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(lang.t(Text::LoginIntro));
+            ui.add_space(theme::space::S);
+            let width = ui.available_width().min(theme::size::FIELD_WIDTH);
+            ui.label(lang.t(Text::LoginUser));
+            ui.add(
+                theme::text_field(egui::TextEdit::singleline(&mut self.login_user))
+                    .desired_width(width),
+            );
+            ui.label(lang.t(Text::LoginPassword));
+            let password = ui.add(
+                theme::text_field(
+                    egui::TextEdit::singleline(&mut *self.login_password).password(true),
+                )
+                .desired_width(width),
+            );
+            ui.add_space(theme::space::S);
+            let ready = !self.login_user.trim().is_empty()
+                && !self.login_password.is_empty()
+                && self.active_action.is_none();
+            let enter =
+                password.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let button = ui.add_enabled(ready, theme::primary_button(lang.t(Text::LoginButton)));
+            if ready && (button.clicked() || enter) {
+                self.connect_with_login();
+            }
+        });
+        ui.add_space(theme::space::L);
     }
     fn header(&mut self, ui: &mut egui::Ui, lang: Language) {
         let state = self.state();
@@ -290,6 +325,10 @@ fn error_text(error: SetupError) -> Text {
         SetupError::NoActiveNetwork => Text::ErrorNoActiveNetwork,
         SetupError::Unavailable => Text::ErrorUnavailable,
         SetupError::CredentialsUnavailable => Text::ErrorCredentialsUnavailable,
+        SetupError::LoginRequired => Text::ErrorLoginRequired,
+        SetupError::LoginRejected => Text::ErrorLoginRejected,
+        SetupError::NotAdministrator => Text::ErrorNotAdministrator,
+        SetupError::TooManyLogins => Text::ErrorTooManyLogins,
     }
 }
 fn reachability_label(reachability: IpReachability) -> (Text, egui::Color32) {
@@ -354,6 +393,51 @@ mod tests {
             session.error = None;
             session.in_range = true;
         }
+    }
+    #[test]
+    fn a_device_that_does_not_know_this_computer_asks_for_an_administrator_login() {
+        use zorvinkel_application::setup::SetupRequest;
+        let mut session = Session::new("h".into(), "Pi".into(), false);
+        assert!(!session.needs_login());
+        for error in [
+            SetupError::LoginRequired,
+            SetupError::LoginRejected,
+            SetupError::NotAdministrator,
+            SetupError::TooManyLogins,
+        ] {
+            session.error = Some(error);
+            assert!(session.needs_login(), "{error:?}");
+            for lang in Language::ALL {
+                render_in(&mut session, lang);
+            }
+        }
+        session.error = Some(SetupError::Unavailable);
+        assert!(!session.needs_login(), "other failures show no login form");
+
+        session.error = Some(SetupError::LoginRequired);
+        session.login_user = " pi ".into();
+        *session.login_password = "secret".into();
+        session.connect_with_login();
+        assert!(
+            session.login_password.is_empty(),
+            "the password leaves the form"
+        );
+        assert!(session.error.is_none());
+        let sent = session.take_outbox();
+        let [
+            SetupRequest::ConnectWithLogin {
+                handle,
+                user,
+                password,
+            },
+        ] = &sent[..]
+        else {
+            panic!("expected one login request");
+        };
+        assert_eq!(
+            (handle.as_str(), user.as_str(), password.as_str()),
+            ("h", "pi", "secret")
+        );
     }
     #[test]
     fn network_labels_name_the_network_in_the_chosen_language() {
