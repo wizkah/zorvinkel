@@ -309,6 +309,14 @@ impl App {
             if language_selector(ui, &mut self.language) {
                 self.language_store.save(self.language);
             }
+            if self.simulation {
+                theme::badge(
+                    ui,
+                    lang.t(Text::PathSimulation),
+                    theme::WARNING,
+                    theme::WARNING_SUBTLE,
+                );
+            }
             // One explicitly placed row, vertically centred in the bar, shared by all tabs.
             let space = ui.available_rect_before_wrap();
             let half = (TAB_HEIGHT + 2.0) / 2.0;
@@ -369,11 +377,11 @@ impl App {
             ui.heading(lang.t(Text::Devices));
             if self.searching {
                 ui.add(egui::Spinner::new().size(14.0));
-                ui.label(RichText::new(lang.t(Text::Searching)).color(theme::MUTED));
+                ui.label(RichText::new(lang.t(Text::Searching)).color(theme::TEXT_MUTED));
             } else {
                 ui.label(
                     RichText::new(lang.format(Text::FoundCount, &[&self.sessions.len()]))
-                        .color(theme::MUTED),
+                        .color(theme::TEXT_MUTED),
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -392,13 +400,13 @@ impl App {
             theme::message(
                 ui,
                 lang.t(search_error_text(error)),
-                theme::ERROR,
-                theme::ERROR_PALE,
+                theme::DANGER,
+                theme::DANGER_SUBTLE,
             );
         }
-        ui.add_space(4.0);
+        ui.add_space(theme::space::XS);
         if self.sessions.is_empty() && !self.searching && self.search_error.is_none() {
-            ui.label(RichText::new(lang.t(Text::NoDevicesFound)).color(theme::MUTED));
+            ui.label(RichText::new(lang.t(Text::NoDevicesFound)).color(theme::TEXT_MUTED));
             return;
         }
         let events = devices::grid(ui, &self.sessions, lang);
@@ -424,7 +432,7 @@ fn tab(
     };
     egui::Frame::new()
         .fill(if selected {
-            theme::BLUE_PALE
+            theme::ACCENT_SUBTLE
         } else {
             egui::Color32::TRANSPARENT
         })
@@ -436,8 +444,8 @@ fn tab(
                 egui::Color32::TRANSPARENT
             },
         ))
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(8, 0))
+        .corner_radius(theme::radius::CONTROL)
+        .inner_margin(egui::Margin::symmetric(theme::space::S as i8, 0))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.spacing_mut().interact_size.y = TAB_HEIGHT;
@@ -446,7 +454,7 @@ fn tab(
                 ui.set_height(TAB_HEIGHT);
                 if let Some(state) = state {
                     if matches!(state, ConnectionState::Working(_)) {
-                        ui.add(egui::Spinner::new().size(10.0).color(theme::AMBER));
+                        ui.add(egui::Spinner::new().size(10.0).color(theme::WARNING));
                     } else {
                         theme::status_dot(ui, device_tab::state_color(state));
                     }
@@ -456,7 +464,10 @@ fn tab(
                     .clicked();
                 if state.is_some() {
                     response.closed = ui
-                        .add(egui::Button::new(RichText::new("×").color(theme::MUTED)).frame(false))
+                        .add(
+                            egui::Button::new(RichText::new("×").color(theme::TEXT_MUTED))
+                                .frame(false),
+                        )
                         .on_hover_text(lang.t(Text::CloseTab))
                         .clicked();
                 }
@@ -511,12 +522,12 @@ impl App {
             .interactable(false)
             .show(context, |ui| {
                 egui::Frame::popup(ui.style())
-                    .inner_margin(16)
+                    .inner_margin(theme::space::L)
                     .show(ui, |ui| {
                         ui.set_width(300.0);
                         ui.vertical_centered(|ui| {
                             self.progress.show(ui, self.language);
-                            ui.add_space(12.0);
+                            ui.add_space(theme::space::M);
                             ui.label(self.language.t(title));
                         });
                     });
@@ -536,8 +547,8 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("tabs")
             .frame(
                 egui::Frame::new()
-                    .fill(egui::Color32::WHITE)
-                    .inner_margin(egui::Margin::symmetric(16, 0)),
+                    .fill(theme::SURFACE_RAISED)
+                    .inner_margin(egui::Margin::symmetric(theme::space::L as i8, 0)),
             )
             .exact_height(TAB_BAR_HEIGHT)
             .show(context, |ui| {
@@ -546,17 +557,29 @@ impl eframe::App for App {
         let lang = self.language;
         if let View::Device(handle) = self.view.clone() {
             egui::SidePanel::right("status")
-                .exact_width(230.0)
+                .exact_width(theme::size::SIDEBAR_WIDTH)
                 .resizable(false)
-                .frame(egui::Frame::new().fill(theme::SIDEBAR).inner_margin(16))
+                .frame(
+                    egui::Frame::new()
+                        .fill(theme::SURFACE_SIDEBAR)
+                        .inner_margin(theme::space::L),
+                )
                 .show(context, |ui| {
-                    if let Some(session) = self.session_mut(&handle) {
-                        session.show_status(ui, lang);
-                    }
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if let Some(session) = self.session_mut(&handle) {
+                                session.show_status(ui, lang);
+                            }
+                        });
                 });
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::BACKGROUND).inner_margin(20))
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .inner_margin(theme::space::XL),
+            )
             .show(context, |ui| match self.view.clone() {
                 View::Devices => self.show_devices(ui),
                 View::Device(handle) => {
@@ -567,7 +590,14 @@ impl eframe::App for App {
                     if let Some(session) = session {
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
-                            .show(ui, |ui| session.show_tab(ui, lang, &mut self.host_keys));
+                            .show(ui, |ui| {
+                                // The terminal uses every column it gets; forms and lists stop
+                                // at a readable width.
+                                if session.page != session::Page::Terminal {
+                                    ui.set_max_width(theme::size::CONTENT_MAX_WIDTH);
+                                }
+                                session.show_tab(ui, lang, &mut self.host_keys);
+                            });
                     }
                 }
             });

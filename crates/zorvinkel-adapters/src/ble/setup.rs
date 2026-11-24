@@ -132,9 +132,11 @@ impl NativeSetup {
                     self.connected_handle = None;
                     // Bluetooth and the local network are searched together; either may be missing.
                     let bluetooth = async {
-                        if self.central.is_none() {
-                            self.central = Some(ProbeCentral::open_profile(STATUS).await?);
-                        }
+                        // A new adapter per search: Windows reports a device it already knows
+                        // only when its advertisement changes, so a repeated search on the same
+                        // adapter can find nothing. The old adapter is released first.
+                        self.central = None;
+                        self.central = Some(ProbeCentral::open_profile(STATUS).await?);
                         self.central
                             .as_mut()
                             .ok_or("Bluetooth unavailable")?
