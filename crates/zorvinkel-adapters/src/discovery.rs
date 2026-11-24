@@ -1,7 +1,7 @@
 //! mDNS/DNS-SD announcement and search of devices on the local network (ADR-023).
 //! Announced values only locate a candidate; the handshake proves the device identity.
 use crate::ble::BleResult;
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{HostnameResolutionEvent, ServiceDaemon, ServiceEvent, ServiceInfo};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -16,6 +16,8 @@ const VERSION: &str = "1";
 /// Bytes of the SHA-256 digest of the device key that the announcement carries.
 const FINGERPRINT_BYTES: usize = 8;
 const MAX_DEVICES: usize = 64;
+/// How long the search waits for the address records of announcements that resolved without one.
+const HOST_LOOKUP: Duration = Duration::from_secs(2);
 /// Handles of contacts that were only seen on the network start with this prefix.
 const IP_HANDLE_PREFIX: &str = "ip:";
 
@@ -146,6 +148,7 @@ pub fn browse(duration: Duration) -> BleResult<Vec<IpDevice>> {
     let events = daemon.browse(SERVICE_TYPE)?;
     let deadline = Instant::now() + duration;
     let mut found = BTreeMap::<String, IpDevice>::new();
+    let mut unaddressed = BTreeMap::<String, (String, IpDevice)>::new();
     while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
         match events.recv_timeout(remaining) {
             Ok(ServiceEvent::ServiceResolved(service)) => {
@@ -158,32 +161,81 @@ pub fn browse(duration: Duration) -> BleResult<Vec<IpDevice>> {
                     .map(|address| address.to_ip_addr())
                     .filter(usable)
                     .collect();
-                if addresses.is_empty() || service.get_port() == 0 {
+                if service.get_port() == 0 {
                     continue;
                 }
                 let fingerprint = service
                     .get_property_val_str(KEY_FINGERPRINT)
                     .filter(|value| valid_fingerprint(value))
                     .map(str::to_ascii_lowercase);
-                if found.len() >= MAX_DEVICES && !found.contains_key(instance) {
+                if (found.len() + unaddressed.len() >= MAX_DEVICES)
+                    && !found.contains_key(instance)
+                    && !unaddressed.contains_key(instance)
+                {
                     continue;
                 }
-                found.insert(
-                    instance.to_owned(),
-                    IpDevice {
-                        instance: instance.to_owned(),
-                        fingerprint,
-                        addresses,
-                        port: service.get_port(),
-                    },
-                );
+                let device = IpDevice {
+                    instance: instance.to_owned(),
+                    fingerprint,
+                    addresses,
+                    port: service.get_port(),
+                };
+                if device.addresses.is_empty() {
+                    // The resolved event may carry only link-local IPv6 addresses while the
+                    // IPv4 record arrives separately (seen on Windows); ask for the host below.
+                    if !found.contains_key(instance) {
+                        unaddressed.insert(
+                            instance.to_owned(),
+                            (service.get_hostname().to_owned(), device),
+                        );
+                    }
+                } else {
+                    unaddressed.remove(instance);
+                    found.insert(instance.to_owned(), device);
+                }
             }
             Ok(_) => (),
             Err(_) => break,
         }
     }
+    resolve_missing_addresses(&daemon, unaddressed, &mut found);
     let _ = daemon.shutdown();
     Ok(found.into_values().collect())
+}
+
+/// Looks up the host name of announcements that resolved without a usable address.
+fn resolve_missing_addresses(
+    daemon: &ServiceDaemon,
+    unaddressed: BTreeMap<String, (String, IpDevice)>,
+    found: &mut BTreeMap<String, IpDevice>,
+) {
+    let deadline = Instant::now() + HOST_LOOKUP;
+    let lookups: Vec<_> = unaddressed
+        .into_iter()
+        .filter_map(|(instance, (host, device))| {
+            let events = daemon.resolve_hostname(&host, Some(HOST_LOOKUP.as_millis() as u64));
+            events.ok().map(|events| (instance, device, events))
+        })
+        .collect();
+    for (instance, mut device, events) in lookups {
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            match events.recv_timeout(remaining) {
+                Ok(HostnameResolutionEvent::AddressesFound(_, addresses)) => {
+                    device.addresses = addresses
+                        .iter()
+                        .map(|address| address.to_ip_addr())
+                        .filter(usable)
+                        .collect();
+                    if !device.addresses.is_empty() {
+                        found.insert(instance, device);
+                        break;
+                    }
+                }
+                Ok(HostnameResolutionEvent::SearchTimeout(_)) | Err(_) => break,
+                Ok(_) => (),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
