@@ -281,10 +281,6 @@ texts! {
         en: "Saved passwords are not available. Enter the password manually.",
         de: "Gespeicherte Passwörter sind nicht verfügbar. Gib das Passwort manuell ein.",
     },
-    ErrorLoginRequired {
-        en: "The device does not know this computer yet. Log in with the user and password of an administrator account of the device.",
-        de: "Das Gerät kennt diesen Computer noch nicht. Melde dich mit Benutzer und Passwort eines Administrator-Kontos des Geräts an.",
-    },
     ErrorLoginRejected {
         en: "User or password is not right. Check both and try again.",
         de: "Benutzer oder Passwort stimmt nicht. Prüfe beides und versuche es erneut.",

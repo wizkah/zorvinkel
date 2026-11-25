@@ -224,7 +224,10 @@ impl Session {
             ConnectionState::Working(action)
         } else if self.is_connected() {
             ConnectionState::Connected
-        } else if self.error.is_some() {
+        } else if self
+            .error
+            .is_some_and(|error| error != SetupError::LoginRequired)
+        {
             ConnectionState::Failed
         } else if !self.in_range {
             ConnectionState::OutOfRange
@@ -405,6 +408,16 @@ mod tests {
 
         session.disconnect();
         session.receive(Err(SetupError::Unavailable), false, false);
+        assert_eq!(session.state(), ConnectionState::Failed);
+    }
+    #[test]
+    fn the_first_refusal_for_registration_is_no_failure() {
+        let mut session = session();
+        session.error = Some(SetupError::LoginRequired);
+        assert!(session.needs_login());
+        assert_eq!(session.state(), ConnectionState::Disconnected);
+        session.error = Some(SetupError::LoginRejected);
+        assert!(session.needs_login());
         assert_eq!(session.state(), ConnectionState::Failed);
     }
     #[test]

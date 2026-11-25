@@ -42,11 +42,11 @@ impl Session {
             terminal.poll(&self.handle, host_keys);
         }
         self.header(ui, lang);
-        if let Some(error) = self.error {
+        if let Some(text) = self.error.and_then(error_text) {
             ui.add_space(theme::space::S);
             theme::message(
                 ui,
-                lang.t(error_text(error)),
+                lang.t(text),
                 theme::DANGER,
                 theme::DANGER_SUBTLE,
             );
@@ -311,8 +311,9 @@ fn availability_style(availability: Availability) -> (bool, egui::Color32) {
     }
 }
 
-fn error_text(error: SetupError) -> Text {
-    match error {
+/// The message for an error; none for the first refusal, where the login form speaks for itself.
+fn error_text(error: SetupError) -> Option<Text> {
+    Some(match error {
         SetupError::IdentityRejected => Text::ErrorIdentityRejected,
         SetupError::AccessDenied => Text::ErrorAccessDenied,
         SetupError::Busy => Text::ErrorBusy,
@@ -325,11 +326,11 @@ fn error_text(error: SetupError) -> Text {
         SetupError::NoActiveNetwork => Text::ErrorNoActiveNetwork,
         SetupError::Unavailable => Text::ErrorUnavailable,
         SetupError::CredentialsUnavailable => Text::ErrorCredentialsUnavailable,
-        SetupError::LoginRequired => Text::ErrorLoginRequired,
+        SetupError::LoginRequired => return None,
         SetupError::LoginRejected => Text::ErrorLoginRejected,
         SetupError::NotAdministrator => Text::ErrorNotAdministrator,
         SetupError::TooManyLogins => Text::ErrorTooManyLogins,
-    }
+    })
 }
 fn reachability_label(reachability: IpReachability) -> (Text, egui::Color32) {
     match reachability {
