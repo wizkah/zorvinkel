@@ -44,12 +44,7 @@ impl Session {
         self.header(ui, lang);
         if let Some(text) = self.error.and_then(error_text) {
             ui.add_space(theme::space::S);
-            theme::message(
-                ui,
-                lang.t(text),
-                theme::DANGER,
-                theme::DANGER_SUBTLE,
-            );
+            theme::message(ui, lang.t(text), theme::DANGER, theme::DANGER_SUBTLE);
         } else if let Some(notice) = self.notice {
             ui.add_space(theme::space::S);
             theme::message(
